@@ -82,7 +82,7 @@ impl KeyHandler {
             KeyCode::Char('l') => Action::OpenLeftovers,
             KeyCode::Char(' ') => Action::ToggleSelection,
             KeyCode::Char('a') => Action::SelectAll,
-            KeyCode::Char('f') => Action::CycleFilter,
+            KeyCode::Char('f') | KeyCode::Char('F') => Action::CycleFilter,
             KeyCode::Char('R') => Action::ToggleRegex,
             KeyCode::Char('e') => Action::Export,
             KeyCode::Char('p') => Action::ToggleProtection,

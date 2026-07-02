@@ -29,24 +29,28 @@ impl FilterPreset {
         }
     }
 
-    pub fn next(self) -> Self {
-        match self {
-            Self::All => Self::Registry,
-            Self::Registry => Self::Store,
-            Self::Store => Self::Orphans,
-            Self::Orphans => Self::Large,
-            Self::Large => Self::Risky,
-            Self::Risky => Self::Bcul,
-            Self::Bcul => Self::All,
-        }
-    }
+    const ORDER: [Self; 7] = [
+        Self::All,
+        Self::Registry,
+        Self::Store,
+        Self::Orphans,
+        Self::Large,
+        Self::Risky,
+        Self::Bcul,
+    ];
 
+    /// Advance to the next preset in the cycle, skipping BCUL when no list is loaded.
+    /// Always moves exactly one visible step per call.
     pub fn next_available(self, has_bcul: bool) -> Self {
-        let mut next = self.next();
-        while next == Self::Bcul && !has_bcul {
-            next = next.next();
-        }
-        next
+        let available: Vec<Self> = Self::ORDER
+            .into_iter()
+            .filter(|preset| *preset != Self::Bcul || has_bcul)
+            .collect();
+        let pos = available
+            .iter()
+            .position(|&preset| preset == self)
+            .unwrap_or(0);
+        available[(pos + 1) % available.len()]
     }
 }
 
@@ -168,6 +172,22 @@ mod tests {
     fn next_available_skips_bcul_without_list() {
         assert_eq!(FilterPreset::Risky.next_available(false), FilterPreset::All);
         assert_eq!(FilterPreset::Risky.next_available(true), FilterPreset::Bcul);
+    }
+
+    #[test]
+    fn next_available_advances_one_step_without_bcul() {
+        let without_bcul = [
+            FilterPreset::All,
+            FilterPreset::Registry,
+            FilterPreset::Store,
+            FilterPreset::Orphans,
+            FilterPreset::Large,
+            FilterPreset::Risky,
+        ];
+        for window in without_bcul.windows(2) {
+            assert_eq!(window[0].next_available(false), window[1]);
+        }
+        assert_eq!(FilterPreset::Risky.next_available(false), FilterPreset::All);
     }
 
     #[test]

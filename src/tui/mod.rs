@@ -19,7 +19,7 @@ use crate::startup;
 use crate::uninstall::{force_uninstall, UninstallQueue};
 use anyhow::Result;
 use apps_view::AppsView;
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, KeyEventKind};
 use details::DetailsView;
 use handler::{filtered_indices, Action, InputMode, KeyHandler, ViewMode};
 use leftovers_view::LeftoversView;
@@ -583,6 +583,10 @@ impl TuiApp {
 
             if event::poll(Duration::from_millis(250))? {
                 if let Event::Key(key) = event::read()? {
+                    // Ignore key repeat/release so a single tap advances one action (e.g. one filter step).
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
                     let filtered_count = indices.len();
                     let action = KeyHandler::handle(
                         key,
