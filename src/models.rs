@@ -3,12 +3,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AppSource {
     Registry,
+    Store,
+    Portable,
+    Steam,
+    Chocolatey,
 }
 
 impl AppSource {
     pub fn label(self) -> &'static str {
         match self {
             Self::Registry => "Registry",
+            Self::Store => "Store",
+            Self::Portable => "Portable",
+            Self::Steam => "Steam",
+            Self::Chocolatey => "Chocolatey",
         }
     }
 }
@@ -18,6 +26,7 @@ pub enum UninstallerType {
     Msi,
     InnoSetup,
     Nsis,
+    StoreApp,
     Unknown,
 }
 
@@ -30,6 +39,8 @@ impl UninstallerType {
             Self::InnoSetup
         } else if lower.contains("nsis") || lower.contains("uninst.exe") {
             Self::Nsis
+        } else if lower.contains("remove-appxpackage") || lower.contains("appx") {
+            Self::StoreApp
         } else {
             Self::Unknown
         }
@@ -40,6 +51,7 @@ impl UninstallerType {
             Self::Msi => "MSI",
             Self::InnoSetup => "Inno Setup",
             Self::Nsis => "NSIS",
+            Self::StoreApp => "Store App",
             Self::Unknown => "Unknown",
         }
     }
@@ -60,6 +72,7 @@ pub struct ApplicationEntry {
     pub install_date: Option<String>,
     pub is_protected: bool,
     pub is_system_component: bool,
+    pub is_orphan: bool,
     pub rating: Option<u8>,
 }
 

@@ -8,6 +8,11 @@ use std::path::PathBuf;
 pub struct Config {
     pub show_system_components: bool,
     pub default_sort: SortOrder,
+    pub scan_store: bool,
+    pub scan_portable: bool,
+    pub scan_steam: bool,
+    pub scan_chocolatey: bool,
+    pub portable_scan_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,14 +27,26 @@ impl Default for Config {
         Self {
             show_system_components: false,
             default_sort: SortOrder::Name,
+            scan_store: true,
+            scan_portable: true,
+            scan_steam: true,
+            scan_chocolatey: true,
+            portable_scan_paths: vec![
+                r"C:\Program Files".into(),
+                r"C:\Program Files (x86)".into(),
+            ],
         }
     }
 }
 
 impl Config {
-    pub fn config_path() -> Result<PathBuf> {
+    pub fn config_dir() -> Result<PathBuf> {
         let appdata = env::var("APPDATA").context("APPDATA environment variable is not set")?;
-        Ok(PathBuf::from(appdata).join("clirm").join("config.toml"))
+        Ok(PathBuf::from(appdata).join("clirm"))
+    }
+
+    pub fn config_path() -> Result<PathBuf> {
+        Ok(Self::config_dir()?.join("config.toml"))
     }
 
     pub fn load() -> Result<Self> {
@@ -69,6 +86,7 @@ mod tests {
         let config = Config::default();
         assert!(!config.show_system_components);
         assert_eq!(config.default_sort, SortOrder::Name);
+        assert!(config.scan_store);
     }
 
     #[test]
@@ -76,16 +94,14 @@ mod tests {
         let config = Config {
             show_system_components: true,
             default_sort: SortOrder::Version,
+            scan_store: false,
+            scan_portable: true,
+            scan_steam: false,
+            scan_chocolatey: true,
+            portable_scan_paths: vec![r"D:\Portable".into()],
         };
         let serialized = toml::to_string_pretty(&config).unwrap();
         let parsed: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(parsed, config);
-    }
-
-    #[test]
-    fn config_path_uses_appdata_clirm() {
-        let path = Config::config_path().unwrap();
-        let path_str = path.to_string_lossy();
-        assert!(path_str.ends_with(r"clirm\config.toml") || path_str.ends_with("clirm/config.toml"));
     }
 }

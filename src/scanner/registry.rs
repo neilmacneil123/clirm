@@ -49,6 +49,7 @@ fn parse_entry(
         .unwrap_or(false);
 
     let id = format!("{hive}\\{path}\\{subkey_name}");
+    let is_orphan = false;
 
     Some(ApplicationEntry {
         id,
@@ -64,6 +65,7 @@ fn parse_entry(
         install_date: read_string(key, "InstallDate"),
         is_protected,
         is_system_component: system_component,
+        is_orphan,
         rating: None,
     })
 }

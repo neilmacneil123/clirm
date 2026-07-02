@@ -1,5 +1,8 @@
 mod config;
+mod export;
+mod filter;
 mod models;
+mod protection;
 mod scanner;
 mod tui;
 mod uninstall;
@@ -28,13 +31,14 @@ fn main() -> Result<()> {
     }
 
     let config = config::Config::load()?;
+    let protection = protection::ProtectionList::load()?;
     let elevated = is_elevated::is_elevated();
 
     if !elevated {
         tracing::warn!("not running with administrator privileges; uninstall may fail");
     }
 
-    let mut app = tui::TuiApp::new(config, elevated)?;
+    let mut app = tui::TuiApp::new(config, protection, elevated)?;
     app.run()?;
 
     Ok(())
