@@ -341,7 +341,8 @@ fn truncate_bcu(value: &str, max: usize) -> String {
     if value.len() <= max {
         value.to_string()
     } else {
-        format!("{}…", &value[..max.saturating_sub(1)])
+        let end = value.floor_char_boundary(max.saturating_sub(1));
+        format!("{}…", &value[..end])
     }
 }
 
@@ -368,6 +369,13 @@ mod tests {
     fn truncate_bcu_uses_byte_length() {
         assert_eq!(truncate_bcu("hello", 10), "hello");
         assert_eq!(truncate_bcu("hello world!!!", 8), "hello w…");
+    }
+
+    #[test]
+    fn truncate_bcu_handles_multibyte_utf8() {
+        assert_eq!(truncate_bcu("€abc", 3), "…");
+        assert_eq!(truncate_bcu("€abc", 4), "€…");
+        assert_eq!(truncate_bcu("日本語アプリ", 7), "日本…");
     }
 
     #[test]
