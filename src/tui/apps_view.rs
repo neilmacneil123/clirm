@@ -27,7 +27,10 @@ impl AppsView {
     }
 
     pub fn move_down(&mut self, max: usize) {
-        let current = self.selected_index();
+        if max == 0 {
+            return;
+        }
+        let current = self.selected_index().min(max - 1);
         if current + 1 < max {
             self.table_state.select(Some(current + 1));
         }
@@ -36,19 +39,30 @@ impl AppsView {
     pub fn move_up(&mut self) {
         let current = self.selected_index();
         if current > 0 {
-            self.table_state.select(Some(current.saturating_sub(1)));
+            self.table_state.select(Some(current - 1));
         }
     }
 
     pub fn ensure_visible(&mut self, visible_rows: usize, total: usize) {
         if total == 0 {
             self.table_state.select(None);
+            *self.table_state.offset_mut() = 0;
             return;
         }
 
         let selected = self.selected_index().min(total - 1);
         self.table_state.select(Some(selected));
-        let _ = visible_rows;
+
+        if visible_rows == 0 {
+            return;
+        }
+
+        let offset = self.table_state.offset();
+        if selected < offset {
+            *self.table_state.offset_mut() = selected;
+        } else if selected >= offset.saturating_add(visible_rows) {
+            *self.table_state.offset_mut() = selected.saturating_sub(visible_rows.saturating_sub(1));
+        }
     }
 
     pub fn render(
@@ -92,6 +106,9 @@ impl AppsView {
             })
             .collect();
 
+        let visible = area.height.saturating_sub(3) as usize;
+        self.ensure_visible(visible, apps.len());
+
         let table = Table::new(
             rows,
             [
@@ -120,9 +137,6 @@ impl AppsView {
                 ])),
         )
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-
-        let visible = area.height.saturating_sub(3) as usize;
-        self.ensure_visible(visible, apps.len());
 
         frame.render_stateful_widget(table, area, &mut self.table_state);
     }

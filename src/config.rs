@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub show_system_components: bool,
     pub default_sort: SortOrder,
@@ -28,9 +28,8 @@ impl Default for Config {
 
 impl Config {
     pub fn config_path() -> Result<PathBuf> {
-        let dirs = ProjectDirs::from("com", "clirm", "clirm")
-            .context("could not determine config directory")?;
-        Ok(dirs.config_dir().join("config.toml"))
+        let appdata = env::var("APPDATA").context("APPDATA environment variable is not set")?;
+        Ok(PathBuf::from(appdata).join("clirm").join("config.toml"))
     }
 
     pub fn load() -> Result<Self> {
@@ -58,5 +57,35 @@ impl Config {
         fs::write(&path, contents)
             .with_context(|| format!("failed to write config to {}", path.display()))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_values() {
+        let config = Config::default();
+        assert!(!config.show_system_components);
+        assert_eq!(config.default_sort, SortOrder::Name);
+    }
+
+    #[test]
+    fn config_round_trip_toml() {
+        let config = Config {
+            show_system_components: true,
+            default_sort: SortOrder::Version,
+        };
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(parsed, config);
+    }
+
+    #[test]
+    fn config_path_uses_appdata_clirm() {
+        let path = Config::config_path().unwrap();
+        let path_str = path.to_string_lossy();
+        assert!(path_str.ends_with(r"clirm\config.toml") || path_str.ends_with("clirm/config.toml"));
     }
 }

@@ -1,6 +1,6 @@
 use crate::models::ApplicationEntry;
 use anyhow::{bail, Context, Result};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub fn uninstall_application(app: &ApplicationEntry) -> Result<()> {
     if app.is_protected {
@@ -23,18 +23,31 @@ pub fn uninstall_application(app: &ApplicationEntry) -> Result<()> {
 fn run_uninstall_command(command: &str, display_name: &str) -> Result<()> {
     tracing::info!("uninstalling {display_name}: {command}");
 
-    let status = Command::new("cmd")
+    let output = Command::new("cmd")
         .args(["/C", command])
-        .status()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
         .with_context(|| format!("failed to launch uninstaller for {display_name}"))?;
 
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
-        bail!(
-            "uninstaller exited with status {:?} for {}",
-            status.code(),
-            display_name
-        )
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            bail!(
+                "uninstaller exited with status {:?} for {}",
+                output.status.code(),
+                display_name
+            );
+        } else {
+            bail!(
+                "uninstaller exited with status {:?} for {}: {}",
+                output.status.code(),
+                display_name,
+                stderr
+            );
+        }
     }
 }

@@ -6,7 +6,7 @@
 
 - Registry-based application scanner (HKLM/HKCU + WOW6432Node)
 - Ratatui TUI with scrollable app list, search filter, and detail pane
-- Single-application uninstall
+- Single-application uninstall with confirmation dialog
 - Config file at `%APPDATA%\clirm\config.toml`
 - Administrator elevation check
 
@@ -36,9 +36,11 @@ Run as Administrator for uninstall operations.
 | `j` / `Down` | Move selection down |
 | `k` / `Up` | Move selection up |
 | `/` | Enter search/filter mode |
-| `x` / `Enter` | Uninstall selected application |
+| `x` | Request uninstall (opens confirmation) |
+| `y` | Confirm uninstall (in confirmation dialog) |
+| `n` / `Esc` | Cancel uninstall (in confirmation dialog) |
 | `r` | Refresh application list |
-| `q` / `Esc` | Quit |
+| `q` / `Esc` | Quit (when not in confirmation dialog) |
 
 ## Configuration
 
@@ -48,6 +50,8 @@ On first run, clirm creates `%APPDATA%\clirm\config.toml`:
 show_system_components = false
 default_sort = "Name"
 ```
+
+`default_sort` controls list ordering (`Name`, `Version`, or `Source`).
 
 ## Project layout
 
@@ -62,8 +66,10 @@ src/
 ├── tui/
 │   ├── mod.rs
 │   ├── apps_view.rs
+│   ├── confirm.rs
 │   ├── details.rs
-│   └── handler.rs
+│   ├── handler.rs
+│   └── terminal_guard.rs
 └── uninstall/
     ├── mod.rs
     └── engine.rs

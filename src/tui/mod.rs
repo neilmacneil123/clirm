@@ -1,6 +1,8 @@
 pub mod apps_view;
+pub mod confirm;
 pub mod details;
 pub mod handler;
+mod terminal_guard;
 
 use crate::config::Config;
 use crate::models::ApplicationEntry;
@@ -8,20 +10,15 @@ use crate::scanner;
 use crate::uninstall;
 use anyhow::Result;
 use apps_view::AppsView;
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use crossterm::event::{self, Event};
 use details::DetailsView;
 use handler::{filter_apps, Action, InputMode, KeyHandler};
 use ratatui::{
-    backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     Terminal,
 };
-use std::io::stdout;
 use std::time::Duration;
+use terminal_guard::TerminalGuard;
 
 pub struct TuiApp {
     apps: Vec<ApplicationEntry>,
@@ -31,6 +28,7 @@ pub struct TuiApp {
     status_message: String,
     is_elevated: bool,
     config: Config,
+    confirm_target: Option<ApplicationEntry>,
 }
 
 impl TuiApp {
@@ -45,17 +43,18 @@ impl TuiApp {
             status_message: format!("Loaded {count} applications"),
             is_elevated,
             config,
+            confirm_target: None,
         })
     }
 
-    fn filtered_apps(&self) -> Vec<&ApplicationEntry> {
+    fn filtered_indices(&self) -> Vec<usize> {
         filter_apps(&self.apps, &self.search_query)
     }
 
     fn selected_app(&self) -> Option<&ApplicationEntry> {
-        let filtered = self.filtered_apps();
+        let indices = self.filtered_indices();
         let index = self.apps_view.selected_index();
-        filtered.get(index).copied()
+        indices.get(index).map(|&i| &self.apps[i])
     }
 
     fn refresh_apps(&mut self) -> Result<()> {
@@ -64,25 +63,31 @@ impl TuiApp {
         Ok(())
     }
 
-    fn uninstall_selected(&mut self) -> Result<()> {
-        let app = self
-            .selected_app()
-            .ok_or_else(|| anyhow::anyhow!("no application selected"))?
-            .clone();
+    fn request_uninstall(&mut self) {
+        let Some(app) = self.selected_app().cloned() else {
+            self.status_message = "No application selected".to_string();
+            return;
+        };
 
         if !app.can_uninstall() {
             self.status_message = format!("Cannot uninstall: {}", app.display_name);
-            return Ok(());
+            return;
         }
 
         if !self.is_elevated {
             self.status_message = "Administrator privileges required for uninstall".to_string();
-            return Ok(());
+            return;
         }
 
+        self.confirm_target = Some(app);
+        self.input_mode = InputMode::Confirm;
+        self.status_message = "Confirm uninstall (y/n)".to_string();
+    }
+
+    fn execute_uninstall(&mut self, app: &ApplicationEntry) -> Result<()> {
         self.status_message = format!("Uninstalling {}...", app.display_name);
 
-        match uninstall::uninstall_application(&app) {
+        match uninstall::uninstall_application(app) {
             Ok(()) => {
                 self.status_message = format!("Uninstalled {}", app.display_name);
                 self.refresh_apps()?;
@@ -96,43 +101,28 @@ impl TuiApp {
     }
 
     pub fn run(&mut self) -> Result<()> {
-        enable_raw_mode()?;
-        let mut stdout = stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
-
-        let result = self.run_loop(&mut terminal);
-
-        disable_raw_mode()?;
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        )?;
-        terminal.show_cursor()?;
-
-        result
+        let mut guard = TerminalGuard::new()?;
+        self.run_loop(&mut guard.terminal)
     }
 
     fn run_loop(
         &mut self,
-        terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+        terminal: &mut Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     ) -> Result<()> {
         loop {
-            let filtered: Vec<ApplicationEntry> = self
-                .filtered_apps()
-                .into_iter()
-                .map(|app| (*app).clone())
-                .collect();
+            let indices = self.filtered_indices();
+            let filtered: Vec<&ApplicationEntry> =
+                indices.iter().map(|&i| &self.apps[i]).collect();
             let selected_index = self
                 .apps_view
                 .selected_index()
                 .min(filtered.len().saturating_sub(1));
-            let selected = filtered.get(selected_index);
+            let selected = filtered.get(selected_index).copied();
             let search_query = self.search_query.clone();
             let status_message = self.status_message.clone();
             let is_elevated = self.is_elevated;
+            let confirm_name = self.confirm_target.as_ref().map(|a| a.display_name.clone());
+            let show_confirm = self.input_mode == InputMode::Confirm;
 
             terminal.draw(|frame| {
                 let chunks = Layout::default()
@@ -143,18 +133,24 @@ impl TuiApp {
                 self.apps_view.render(
                     frame,
                     chunks[0],
-                    &filtered,
+                    &filtered.iter().map(|app| (*app).clone()).collect::<Vec<_>>(),
                     &search_query,
                     &status_message,
                     is_elevated,
                 );
 
                 DetailsView::render(frame, chunks[1], selected);
+
+                if show_confirm {
+                    if let Some(name) = &confirm_name {
+                        confirm::render_confirm_dialog(frame, frame.area(), name);
+                    }
+                }
             })?;
 
             if event::poll(Duration::from_millis(250))? {
                 if let Event::Key(key) = event::read()? {
-                    let filtered_count = filtered.len();
+                    let filtered_count = indices.len();
                     let action = KeyHandler::handle(
                         key,
                         &mut self.input_mode,
@@ -170,10 +166,17 @@ impl TuiApp {
                                 self.status_message = format!("Refresh failed: {e}");
                             }
                         }
-                        Action::Uninstall => {
-                            if let Err(e) = self.uninstall_selected() {
-                                self.status_message = format!("Uninstall error: {e}");
+                        Action::RequestUninstall => self.request_uninstall(),
+                        Action::ConfirmUninstall => {
+                            if let Some(app) = self.confirm_target.take() {
+                                if let Err(e) = self.execute_uninstall(&app) {
+                                    self.status_message = format!("Uninstall error: {e}");
+                                }
                             }
+                        }
+                        Action::CancelUninstall => {
+                            self.confirm_target = None;
+                            self.status_message = "Uninstall cancelled".to_string();
                         }
                         Action::None => {}
                     }

@@ -70,3 +70,40 @@ impl ApplicationEntry {
             && (self.uninstall_string.is_some() || self.quiet_uninstall_string.is_some())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::UninstallerType;
+
+    #[test]
+    fn detect_msi_uninstaller() {
+        assert_eq!(
+            UninstallerType::detect(r#"C:\Windows\System32\msiexec.exe /X{GUID}"#),
+            UninstallerType::Msi
+        );
+    }
+
+    #[test]
+    fn detect_inno_uninstaller() {
+        assert_eq!(
+            UninstallerType::detect(r#"C:\App\unins000.exe /Inno"#),
+            UninstallerType::InnoSetup
+        );
+    }
+
+    #[test]
+    fn detect_nsis_uninstaller() {
+        assert_eq!(
+            UninstallerType::detect(r#"C:\App\uninst.exe"#),
+            UninstallerType::Nsis
+        );
+    }
+
+    #[test]
+    fn detect_unknown_uninstaller() {
+        assert_eq!(
+            UninstallerType::detect(r#"C:\App\custom-remove.exe"#),
+            UninstallerType::Unknown
+        );
+    }
+}

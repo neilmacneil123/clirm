@@ -5,7 +5,8 @@ use winreg::enums::*;
 use winreg::RegKey;
 
 const UNINSTALL_PATH: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
-const WOW6432_PATH: &str = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall";
+const WOW6432_PATH: &str =
+    r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall";
 
 fn read_string(key: &RegKey, name: &str) -> Option<String> {
     key.get_value(name).ok()
@@ -15,11 +16,12 @@ fn read_dword(key: &RegKey, name: &str) -> Option<u32> {
     key.get_value(name).ok()
 }
 
-fn read_qword(key: &RegKey, name: &str) -> Option<u64> {
-    key.get_value(name).ok()
-}
-
-fn parse_entry(hive: &str, subkey_name: &str, key: &RegKey) -> Option<ApplicationEntry> {
+fn parse_entry(
+    hive: &str,
+    path: &str,
+    subkey_name: &str,
+    key: &RegKey,
+) -> Option<ApplicationEntry> {
     let display_name = read_string(key, "DisplayName")?;
     if display_name.trim().is_empty() {
         return None;
@@ -42,7 +44,11 @@ fn parse_entry(hive: &str, subkey_name: &str, key: &RegKey) -> Option<Applicatio
         .map(|v| v != 0)
         .unwrap_or(false);
 
-    let id = format!("{hive}\\{subkey_name}");
+    let is_protected = read_dword(key, "NoRemove")
+        .map(|v| v != 0)
+        .unwrap_or(false);
+
+    let id = format!("{hive}\\{path}\\{subkey_name}");
 
     Some(ApplicationEntry {
         id,
@@ -54,9 +60,9 @@ fn parse_entry(hive: &str, subkey_name: &str, key: &RegKey) -> Option<Applicatio
         uninstall_string,
         quiet_uninstall_string,
         uninstaller_type,
-        size_estimate: read_qword(key, "EstimatedSize").map(|kb| kb * 1024),
+        size_estimate: read_dword(key, "EstimatedSize").map(|kb| u64::from(kb) * 1024),
         install_date: read_string(key, "InstallDate"),
-        is_protected: false,
+        is_protected,
         is_system_component: system_component,
         rating: None,
     })
@@ -74,7 +80,8 @@ fn scan_hive(
         .with_context(|| format!("failed to open registry path {path}"))?;
 
     for subkey_name in hive.enum_keys().filter_map(Result::ok) {
-        if !seen.insert(subkey_name.clone()) {
+        let entry_id = format!("{hive_label}\\{path}\\{subkey_name}");
+        if !seen.insert(entry_id) {
             continue;
         }
 
@@ -83,7 +90,7 @@ fn scan_hive(
             Err(_) => continue,
         };
 
-        if let Some(entry) = parse_entry(hive_label, &subkey_name, &subkey) {
+        if let Some(entry) = parse_entry(hive_label, path, &subkey_name, &subkey) {
             entries.push(entry);
         }
     }
@@ -109,6 +116,5 @@ pub fn scan_registry() -> Result<Vec<ApplicationEntry>> {
         }
     }
 
-    all.sort_by_key(|a| a.display_name.to_lowercase());
     Ok(all)
 }

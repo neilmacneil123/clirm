@@ -6,6 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub enum InputMode {
     Normal,
     Search,
+    Confirm,
 }
 
 pub struct KeyHandler;
@@ -19,6 +20,7 @@ impl KeyHandler {
         filtered_count: usize,
     ) -> Action {
         match *mode {
+            InputMode::Confirm => Self::handle_confirm(key, mode),
             InputMode::Search => Self::handle_search(key, mode, search_query, apps_view),
             InputMode::Normal => Self::handle_normal(key, mode, apps_view, filtered_count),
         }
@@ -45,8 +47,21 @@ impl KeyHandler {
                 Action::None
             }
             KeyCode::Char('r') => Action::Refresh,
-            KeyCode::Char('x') => Action::Uninstall,
-            KeyCode::Enter => Action::Uninstall,
+            KeyCode::Char('x') => Action::RequestUninstall,
+            _ => Action::None,
+        }
+    }
+
+    fn handle_confirm(key: KeyEvent, mode: &mut InputMode) -> Action {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                *mode = InputMode::Normal;
+                Action::ConfirmUninstall
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                *mode = InputMode::Normal;
+                Action::CancelUninstall
+            }
             _ => Action::None,
         }
     }
@@ -87,17 +102,20 @@ pub enum Action {
     None,
     Quit,
     Refresh,
-    Uninstall,
+    RequestUninstall,
+    ConfirmUninstall,
+    CancelUninstall,
 }
 
-pub fn filter_apps<'a>(apps: &'a [ApplicationEntry], query: &str) -> Vec<&'a ApplicationEntry> {
+pub fn filter_apps(apps: &[ApplicationEntry], query: &str) -> Vec<usize> {
     if query.is_empty() {
-        return apps.iter().collect();
+        return (0..apps.len()).collect();
     }
 
     let needle = query.to_lowercase();
     apps.iter()
-        .filter(|app| {
+        .enumerate()
+        .filter(|(_, app)| {
             app.display_name.to_lowercase().contains(&needle)
                 || app
                     .publisher
@@ -108,5 +126,59 @@ pub fn filter_apps<'a>(apps: &'a [ApplicationEntry], query: &str) -> Vec<&'a App
                     .as_ref()
                     .is_some_and(|v| v.to_lowercase().contains(&needle))
         })
+        .map(|(index, _)| index)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{AppSource, ApplicationEntry, UninstallerType};
+
+    fn sample_app(name: &str, publisher: Option<&str>, version: Option<&str>) -> ApplicationEntry {
+        ApplicationEntry {
+            id: name.to_string(),
+            display_name: name.to_string(),
+            version: version.map(str::to_string),
+            publisher: publisher.map(str::to_string),
+            source: AppSource::Registry,
+            install_location: None,
+            uninstall_string: Some("cmd".into()),
+            quiet_uninstall_string: None,
+            uninstaller_type: UninstallerType::Unknown,
+            size_estimate: None,
+            install_date: None,
+            is_protected: false,
+            is_system_component: false,
+            rating: None,
+        }
+    }
+
+    #[test]
+    fn filter_apps_empty_query_returns_all_indices() {
+        let apps = vec![
+            sample_app("Alpha", None, None),
+            sample_app("Beta", None, None),
+        ];
+        assert_eq!(filter_apps(&apps, ""), vec![0, 1]);
+    }
+
+    #[test]
+    fn filter_apps_matches_display_name() {
+        let apps = vec![
+            sample_app("Alpha App", None, None),
+            sample_app("Beta App", None, None),
+        ];
+        assert_eq!(filter_apps(&apps, "alpha"), vec![0]);
+    }
+
+    #[test]
+    fn filter_apps_matches_publisher_and_version() {
+        let apps = vec![
+            sample_app("One", Some("Acme Corp"), None),
+            sample_app("Two", None, Some("2.0.0")),
+        ];
+        assert_eq!(filter_apps(&apps, "acme"), vec![0]);
+        assert_eq!(filter_apps(&apps, "2.0"), vec![1]);
+    }
 }
