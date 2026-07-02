@@ -82,6 +82,38 @@ impl ApplicationEntry {
             && !self.is_system_component
             && (self.uninstall_string.is_some() || self.quiet_uninstall_string.is_some())
     }
+
+    pub fn can_force_uninstall(&self) -> bool {
+        !self.is_protected
+            && !self.is_system_component
+            && (self.install_location.is_some() || self.source == AppSource::Registry)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JunkKind {
+    File,
+    Directory,
+    RegistryKey,
+}
+
+impl JunkKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::File => "File",
+            Self::Directory => "Directory",
+            Self::RegistryKey => "Registry",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JunkItem {
+    pub id: String,
+    pub path: String,
+    pub kind: JunkKind,
+    pub size_estimate: Option<u64>,
+    pub source_app: Option<String>,
 }
 
 #[cfg(test)]

@@ -1,7 +1,14 @@
 use crate::filter::{filter_visible, FilterPreset};
 use crate::models::ApplicationEntry;
 use crate::tui::apps_view::AppsView;
+use crate::tui::leftovers_view::LeftoversView;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Apps,
+    Leftovers,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -9,22 +16,32 @@ pub enum InputMode {
     Search,
     Confirm,
     BatchConfirm,
+    ForceConfirm,
 }
 
 pub struct KeyHandler;
 
 impl KeyHandler {
+    #[allow(clippy::too_many_arguments)]
     pub fn handle(
         key: KeyEvent,
+        view: ViewMode,
         mode: &mut InputMode,
         search_query: &mut String,
         apps_view: &mut AppsView,
+        leftovers_view: &mut LeftoversView,
         filtered_count: usize,
+        leftovers_count: usize,
     ) -> Action {
         match *mode {
-            InputMode::Confirm | InputMode::BatchConfirm => Self::handle_confirm(key, mode),
+            InputMode::Confirm | InputMode::BatchConfirm | InputMode::ForceConfirm => {
+                Self::handle_confirm(key, mode)
+            }
             InputMode::Search => Self::handle_search(key, mode, search_query, apps_view),
-            InputMode::Normal => Self::handle_normal(key, mode, apps_view, filtered_count),
+            InputMode::Normal => match view {
+                ViewMode::Apps => Self::handle_normal(key, mode, apps_view, filtered_count),
+                ViewMode::Leftovers => Self::handle_leftovers(key, leftovers_view, leftovers_count),
+            },
         }
     }
 
@@ -51,6 +68,8 @@ impl KeyHandler {
             KeyCode::Char('r') => Action::Refresh,
             KeyCode::Char('x') => Action::RequestUninstall,
             KeyCode::Char('X') => Action::RequestBatchUninstall,
+            KeyCode::Char('Z') => Action::RequestForceUninstall,
+            KeyCode::Char('l') => Action::OpenLeftovers,
             KeyCode::Char(' ') => Action::ToggleSelection,
             KeyCode::Char('a') => Action::SelectAll,
             KeyCode::Char('f') => Action::CycleFilter,
@@ -64,18 +83,40 @@ impl KeyHandler {
     fn handle_confirm(key: KeyEvent, mode: &mut InputMode) -> Action {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                let batch = *mode == InputMode::BatchConfirm;
+                let action = match *mode {
+                    InputMode::BatchConfirm => Action::ConfirmBatchUninstall,
+                    InputMode::ForceConfirm => Action::ConfirmForceUninstall,
+                    _ => Action::ConfirmUninstall,
+                };
                 *mode = InputMode::Normal;
-                if batch {
-                    Action::ConfirmBatchUninstall
-                } else {
-                    Action::ConfirmUninstall
-                }
+                action
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 *mode = InputMode::Normal;
                 Action::CancelUninstall
             }
+            _ => Action::None,
+        }
+    }
+
+    fn handle_leftovers(
+        key: KeyEvent,
+        leftovers_view: &mut LeftoversView,
+        leftovers_count: usize,
+    ) -> Action {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => Action::CloseLeftovers,
+            KeyCode::Char('l') => Action::CloseLeftovers,
+            KeyCode::Char('j') | KeyCode::Down => {
+                leftovers_view.move_down(leftovers_count);
+                Action::None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                leftovers_view.move_up();
+                Action::None
+            }
+            KeyCode::Char('d') => Action::DeleteLeftover,
+            KeyCode::Char('s') => Action::RescanLeftovers,
             _ => Action::None,
         }
     }
@@ -127,6 +168,12 @@ pub enum Action {
     ToggleRegex,
     Export,
     ToggleProtection,
+    OpenLeftovers,
+    CloseLeftovers,
+    RescanLeftovers,
+    DeleteLeftover,
+    RequestForceUninstall,
+    ConfirmForceUninstall,
 }
 
 pub fn filtered_indices(
@@ -166,6 +213,9 @@ mod tests {
     #[test]
     fn filtered_indices_all() {
         let apps = vec![sample_app("A"), sample_app("B")];
-        assert_eq!(filtered_indices(&apps, FilterPreset::All, "", false), vec![0, 1]);
+        assert_eq!(
+            filtered_indices(&apps, FilterPreset::All, "", false),
+            vec![0, 1]
+        );
     }
 }

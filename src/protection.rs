@@ -37,9 +37,7 @@ impl ProtectionList {
         }
         let mut ids: Vec<_> = self.ids.iter().cloned().collect();
         ids.sort();
-        let file = ProtectionFile {
-            protected_ids: ids,
-        };
+        let file = ProtectionFile { protected_ids: ids };
         let contents = toml::to_string_pretty(&file)?;
         fs::write(&self.path, contents)?;
         Ok(())

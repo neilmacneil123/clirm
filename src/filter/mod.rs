@@ -42,9 +42,7 @@ pub fn apply_preset(apps: &[ApplicationEntry], preset: FilterPreset) -> Vec<usiz
             FilterPreset::Registry => app.source == AppSource::Registry,
             FilterPreset::Store => app.source == AppSource::Store,
             FilterPreset::Orphans => app.is_orphan,
-            FilterPreset::Large => app
-                .size_estimate
-                .is_some_and(|s| s >= LARGE_THRESHOLD),
+            FilterPreset::Large => app.size_estimate.is_some_and(|s| s >= LARGE_THRESHOLD),
         })
         .map(|(i, _)| i)
         .collect()

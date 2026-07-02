@@ -9,7 +9,10 @@ use crate::models::ApplicationEntry;
 use crate::protection::ProtectionList;
 use anyhow::Result;
 
-pub fn scan_applications(config: &Config, protection: &ProtectionList) -> Result<Vec<ApplicationEntry>> {
+pub fn scan_applications(
+    config: &Config,
+    protection: &ProtectionList,
+) -> Result<Vec<ApplicationEntry>> {
     let mut apps = registry::scan_registry()?;
 
     if config.scan_store {
@@ -65,10 +68,11 @@ pub fn sort_applications(apps: &mut [ApplicationEntry], order: SortOrder) {
                 .cmp(&b.version.as_deref().unwrap_or("").to_lowercase())
         }),
         SortOrder::Source => apps.sort_by(|a, b| {
-            a.source
-                .label()
-                .cmp(b.source.label())
-                .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
+            a.source.label().cmp(b.source.label()).then_with(|| {
+                a.display_name
+                    .to_lowercase()
+                    .cmp(&b.display_name.to_lowercase())
+            })
         }),
     }
 }

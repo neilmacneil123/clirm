@@ -1,6 +1,7 @@
 mod config;
 mod export;
 mod filter;
+mod junk;
 mod models;
 mod protection;
 mod scanner;

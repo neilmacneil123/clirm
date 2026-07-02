@@ -5,8 +5,7 @@ use winreg::enums::*;
 use winreg::RegKey;
 
 const UNINSTALL_PATH: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
-const WOW6432_PATH: &str =
-    r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall";
+const WOW6432_PATH: &str = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall";
 
 fn read_string(key: &RegKey, name: &str) -> Option<String> {
     key.get_value(name).ok()
@@ -44,9 +43,7 @@ fn parse_entry(
         .map(|v| v != 0)
         .unwrap_or(false);
 
-    let is_protected = read_dword(key, "NoRemove")
-        .map(|v| v != 0)
-        .unwrap_or(false);
+    let is_protected = read_dword(key, "NoRemove").map(|v| v != 0).unwrap_or(false);
 
     let id = format!("{hive}\\{path}\\{subkey_name}");
     let is_orphan = false;
