@@ -1,13 +1,16 @@
+use crate::filter::bcul::BculList;
 use crate::filter::{filter_visible, FilterPreset};
 use crate::models::ApplicationEntry;
 use crate::tui::apps_view::AppsView;
 use crate::tui::leftovers_view::LeftoversView;
+use crate::tui::startup_view::StartupView;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
     Apps,
     Leftovers,
+    Startup,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +21,7 @@ pub enum InputMode {
     BatchConfirm,
     ForceConfirm,
     LeftoverConfirm,
+    StartupConfirm,
 }
 
 pub struct KeyHandler;
@@ -31,18 +35,22 @@ impl KeyHandler {
         search_query: &mut String,
         apps_view: &mut AppsView,
         leftovers_view: &mut LeftoversView,
+        startup_view: &mut StartupView,
         filtered_count: usize,
         leftovers_count: usize,
+        startup_count: usize,
     ) -> Action {
         match *mode {
             InputMode::Confirm
             | InputMode::BatchConfirm
             | InputMode::ForceConfirm
-            | InputMode::LeftoverConfirm => Self::handle_confirm(key, mode),
+            | InputMode::LeftoverConfirm
+            | InputMode::StartupConfirm => Self::handle_confirm(key, mode),
             InputMode::Search => Self::handle_search(key, mode, search_query, apps_view),
             InputMode::Normal => match view {
                 ViewMode::Apps => Self::handle_normal(key, mode, apps_view, filtered_count),
                 ViewMode::Leftovers => Self::handle_leftovers(key, leftovers_view, leftovers_count),
+                ViewMode::Startup => Self::handle_startup(key, startup_view, startup_count),
             },
         }
     }
@@ -78,6 +86,29 @@ impl KeyHandler {
             KeyCode::Char('R') => Action::ToggleRegex,
             KeyCode::Char('e') => Action::Export,
             KeyCode::Char('p') => Action::ToggleProtection,
+            KeyCode::Char('S') => Action::OpenStartup,
+            _ => Action::None,
+        }
+    }
+
+    fn handle_startup(
+        key: KeyEvent,
+        startup_view: &mut StartupView,
+        startup_count: usize,
+    ) -> Action {
+        match key.code {
+            KeyCode::Char('q') => Action::Quit,
+            KeyCode::Char('S') | KeyCode::Esc => Action::CloseStartup,
+            KeyCode::Char('j') | KeyCode::Down => {
+                startup_view.move_down(startup_count);
+                Action::None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                startup_view.move_up();
+                Action::None
+            }
+            KeyCode::Char('d') => Action::RequestDisableStartup,
+            KeyCode::Char('r') => Action::RefreshStartup,
             _ => Action::None,
         }
     }
@@ -89,6 +120,7 @@ impl KeyHandler {
                     InputMode::BatchConfirm => Action::ConfirmBatchUninstall,
                     InputMode::ForceConfirm => Action::ConfirmForceUninstall,
                     InputMode::LeftoverConfirm => Action::ConfirmDeleteLeftover,
+                    InputMode::StartupConfirm => Action::ConfirmDisableStartup,
                     _ => Action::ConfirmUninstall,
                 };
                 *mode = InputMode::Normal;
@@ -178,6 +210,11 @@ pub enum Action {
     ConfirmDeleteLeftover,
     RequestForceUninstall,
     ConfirmForceUninstall,
+    OpenStartup,
+    CloseStartup,
+    RefreshStartup,
+    RequestDisableStartup,
+    ConfirmDisableStartup,
 }
 
 pub fn filtered_indices(
@@ -185,8 +222,9 @@ pub fn filtered_indices(
     preset: FilterPreset,
     query: &str,
     use_regex: bool,
+    bcul: Option<&BculList>,
 ) -> Vec<usize> {
-    filter_visible(apps, preset, query, use_regex)
+    filter_visible(apps, preset, query, use_regex, bcul)
 }
 
 #[cfg(test)]
@@ -225,8 +263,10 @@ mod tests {
         search_query: &mut String,
         apps_view: &mut AppsView,
         leftovers_view: &mut LeftoversView,
+        startup_view: &mut StartupView,
         filtered_count: usize,
         leftovers_count: usize,
+        startup_count: usize,
     ) -> Action {
         KeyHandler::handle(
             key,
@@ -235,8 +275,10 @@ mod tests {
             search_query,
             apps_view,
             leftovers_view,
+            startup_view,
             filtered_count,
             leftovers_count,
+            startup_count,
         )
     }
 
@@ -244,7 +286,7 @@ mod tests {
     fn filtered_indices_all() {
         let apps = vec![sample_app("A"), sample_app("B")];
         assert_eq!(
-            filtered_indices(&apps, FilterPreset::All, "", false),
+            filtered_indices(&apps, FilterPreset::All, "", false, None),
             vec![0, 1]
         );
     }
@@ -255,6 +297,7 @@ mod tests {
         let mut search = String::new();
         let mut apps_view = AppsView::new();
         let mut leftovers_view = LeftoversView::new();
+        let mut startup_view = StartupView::new();
 
         let action = handle_key(
             key_event(KeyCode::Char('q')),
@@ -263,6 +306,8 @@ mod tests {
             &mut search,
             &mut apps_view,
             &mut leftovers_view,
+            &mut startup_view,
+            0,
             0,
             0,
         );
@@ -276,6 +321,7 @@ mod tests {
         let mut search = String::new();
         let mut apps_view = AppsView::new();
         let mut leftovers_view = LeftoversView::new();
+        let mut startup_view = StartupView::new();
 
         let action = handle_key(
             key_event(KeyCode::Esc),
@@ -284,6 +330,8 @@ mod tests {
             &mut search,
             &mut apps_view,
             &mut leftovers_view,
+            &mut startup_view,
+            0,
             0,
             0,
         );
@@ -297,6 +345,7 @@ mod tests {
         let mut search = String::new();
         let mut apps_view = AppsView::new();
         let mut leftovers_view = LeftoversView::new();
+        let mut startup_view = StartupView::new();
 
         let action = handle_key(
             key_event(KeyCode::Char('d')),
@@ -305,8 +354,10 @@ mod tests {
             &mut search,
             &mut apps_view,
             &mut leftovers_view,
+            &mut startup_view,
             0,
             1,
+            0,
         );
 
         assert_eq!(action, Action::RequestDeleteLeftover);
@@ -318,6 +369,7 @@ mod tests {
         let mut search = String::new();
         let mut apps_view = AppsView::new();
         let mut leftovers_view = LeftoversView::new();
+        let mut startup_view = StartupView::new();
 
         let action = handle_key(
             key_event(KeyCode::Char('y')),
@@ -326,7 +378,9 @@ mod tests {
             &mut search,
             &mut apps_view,
             &mut leftovers_view,
+            &mut startup_view,
             1,
+            0,
             0,
         );
 
@@ -340,6 +394,7 @@ mod tests {
         let mut search = String::new();
         let mut apps_view = AppsView::new();
         let mut leftovers_view = LeftoversView::new();
+        let mut startup_view = StartupView::new();
 
         let action = handle_key(
             key_event(KeyCode::Esc),
@@ -348,7 +403,9 @@ mod tests {
             &mut search,
             &mut apps_view,
             &mut leftovers_view,
+            &mut startup_view,
             1,
+            0,
             0,
         );
 
@@ -362,6 +419,7 @@ mod tests {
         let mut search = String::new();
         let mut apps_view = AppsView::new();
         let mut leftovers_view = LeftoversView::new();
+        let mut startup_view = StartupView::new();
 
         let action = handle_key(
             key_event(KeyCode::Char('d')),
@@ -370,8 +428,10 @@ mod tests {
             &mut search,
             &mut apps_view,
             &mut leftovers_view,
+            &mut startup_view,
             0,
             1,
+            0,
         );
 
         assert_eq!(action, Action::None);
@@ -383,6 +443,7 @@ mod tests {
         let mut search = String::new();
         let mut apps_view = AppsView::new();
         let mut leftovers_view = LeftoversView::new();
+        let mut startup_view = StartupView::new();
 
         let action = handle_key(
             key_event(KeyCode::Char('y')),
@@ -391,8 +452,10 @@ mod tests {
             &mut search,
             &mut apps_view,
             &mut leftovers_view,
+            &mut startup_view,
             0,
             1,
+            0,
         );
 
         assert_eq!(action, Action::ConfirmDeleteLeftover);
@@ -405,6 +468,7 @@ mod tests {
         let mut search = String::new();
         let mut apps_view = AppsView::new();
         let mut leftovers_view = LeftoversView::new();
+        let mut startup_view = StartupView::new();
 
         let action = handle_key(
             key_event(KeyCode::Char('l')),
@@ -413,7 +477,9 @@ mod tests {
             &mut search,
             &mut apps_view,
             &mut leftovers_view,
+            &mut startup_view,
             1,
+            0,
             0,
         );
 

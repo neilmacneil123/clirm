@@ -7,6 +7,8 @@ pub enum AppSource {
     Portable,
     Steam,
     Chocolatey,
+    WindowsFeature,
+    WindowsUpdate,
 }
 
 impl AppSource {
@@ -17,6 +19,8 @@ impl AppSource {
             Self::Portable => "Portable",
             Self::Steam => "Steam",
             Self::Chocolatey => "Chocolatey",
+            Self::WindowsFeature => "Windows Feature",
+            Self::WindowsUpdate => "Windows Update",
         }
     }
 }
@@ -113,6 +117,43 @@ impl JunkKind {
             Self::RegistryKey => "Registry",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StartupLocation {
+    RunKeyLocalMachine,
+    RunKeyLocalMachineWow,
+    RunKeyCurrentUser,
+    StartupFolderUser,
+    StartupFolderAllUsers,
+}
+
+impl StartupLocation {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::RunKeyLocalMachine => "HKLM Run",
+            Self::RunKeyLocalMachineWow => "HKLM Run (WOW)",
+            Self::RunKeyCurrentUser => "HKCU Run",
+            Self::StartupFolderUser => "User Startup",
+            Self::StartupFolderAllUsers => "All Users Startup",
+        }
+    }
+
+    pub fn is_registry(self) -> bool {
+        matches!(
+            self,
+            Self::RunKeyLocalMachine | Self::RunKeyLocalMachineWow | Self::RunKeyCurrentUser
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartupEntry {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    pub location: StartupLocation,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

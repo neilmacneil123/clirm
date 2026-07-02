@@ -1,0 +1,39 @@
+{
+  "entries": [
+    {"pattern": "bonzi", "rating": 10, "field": "name"},
+    {"pattern": "conduit", "rating": 15, "field": "name"},
+    {"pattern": "opencandy", "rating": 20, "field": "name"},
+    {"pattern": "babylon", "rating": 20, "field": "name"},
+    {"pattern": "ask toolbar", "rating": 25, "field": "name"},
+    {"pattern": "yahoo toolbar", "rating": 25, "field": "name"},
+    {"pattern": "mywebsearch", "rating": 20, "field": "name"},
+    {"pattern": "incredibar", "rating": 15, "field": "name"},
+    {"pattern": "searchprotect", "rating": 20, "field": "name"},
+    {"pattern": "pc optimizer", "rating": 30, "field": "name"},
+    {"pattern": "driver booster", "rating": 55, "field": "name"},
+    {"pattern": "ccleaner", "rating": 70, "field": "name"},
+    {"pattern": "7-zip", "rating": 95, "field": "name"},
+    {"pattern": "vlc", "rating": 95, "field": "name"},
+    {"pattern": "firefox", "rating": 90, "field": "name"},
+    {"pattern": "google chrome", "rating": 85, "field": "name"},
+    {"pattern": "visual studio", "rating": 90, "field": "name"},
+    {"pattern": "microsoft", "rating": 80, "field": "publisher"},
+    {"pattern": "adobe", "rating": 75, "field": "publisher"},
+    {"pattern": "oracle", "rating": 60, "field": "publisher"},
+    {"pattern": "toolbars", "rating": 25, "field": "name"},
+    {"pattern": "coupon", "rating": 20, "field": "name"},
+    {"pattern": "optimizer pro", "rating": 25, "field": "name"},
+    {"pattern": "registry cleaner", "rating": 35, "field": "name"},
+    {"pattern": "speed up", "rating": 30, "field": "name"},
+    {"pattern": "pc repair", "rating": 25, "field": "name"},
+    {"pattern": "browser assistant", "rating": 30, "field": "name"},
+    {"pattern": "softonic", "rating": 35, "field": "name"},
+    {"pattern": "download manager", "rating": 40, "field": "name"}
+  ],
+  "heuristics": {
+    "system_component_rating": 90,
+    "protected_rating": 85,
+    "no_publisher_penalty": 15,
+    "default_rating": 60
+  }
+}

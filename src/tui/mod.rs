@@ -4,15 +4,18 @@ pub mod details;
 pub mod dialogs;
 pub mod handler;
 pub mod leftovers_view;
+pub mod startup_view;
 mod terminal_guard;
 
 use crate::config::Config;
 use crate::export;
+use crate::filter::bcul::BculList;
 use crate::filter::FilterPreset;
 use crate::junk::{delete_junk_item, scan_for_app, scan_orphan_leftovers};
-use crate::models::{ApplicationEntry, JunkItem};
+use crate::models::{ApplicationEntry, JunkItem, StartupEntry};
 use crate::protection::ProtectionList;
 use crate::scanner;
+use crate::startup;
 use crate::uninstall::{force_uninstall, UninstallQueue};
 use anyhow::Result;
 use apps_view::AppsView;
@@ -24,6 +27,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     Terminal,
 };
+use startup_view::StartupView;
 use std::time::Duration;
 use terminal_guard::TerminalGuard;
 
@@ -45,12 +49,31 @@ pub struct TuiApp {
     filter_preset: FilterPreset,
     use_regex: bool,
     uninstall_queue: Option<UninstallQueue>,
+    startup_view: StartupView,
+    startup_entries: Vec<StartupEntry>,
+    startup_confirm_target: Option<StartupEntry>,
+    bcul_filter: Option<BculList>,
 }
 
 impl TuiApp {
-    pub fn new(config: Config, protection: ProtectionList, is_elevated: bool) -> Result<Self> {
+    pub fn new(
+        config: Config,
+        protection: ProtectionList,
+        is_elevated: bool,
+        bcul_filter: Option<BculList>,
+    ) -> Result<Self> {
         let apps = scanner::scan_applications(&config, &protection)?;
         let count = apps.len();
+        let filter_preset = if bcul_filter.is_some() {
+            FilterPreset::Bcul
+        } else {
+            FilterPreset::All
+        };
+        let status_message = if bcul_filter.is_some() {
+            format!("Loaded {count} applications (BCUL filter active)")
+        } else {
+            format!("Loaded {count} applications")
+        };
         Ok(Self {
             apps,
             apps_view: AppsView::new(),
@@ -61,14 +84,18 @@ impl TuiApp {
             view_mode: ViewMode::Apps,
             search_query: String::new(),
             input_mode: InputMode::Normal,
-            status_message: format!("Loaded {count} applications"),
+            status_message,
             is_elevated,
             config,
             protection,
             confirm_target: None,
-            filter_preset: FilterPreset::All,
+            filter_preset,
             use_regex: false,
             uninstall_queue: None,
+            startup_view: StartupView::new(),
+            startup_entries: Vec::new(),
+            startup_confirm_target: None,
+            bcul_filter,
         })
     }
 
@@ -78,6 +105,7 @@ impl TuiApp {
             self.filter_preset,
             &self.search_query,
             self.use_regex,
+            self.bcul_filter.as_ref(),
         )
     }
 
@@ -352,6 +380,68 @@ impl TuiApp {
         Ok(())
     }
 
+    fn open_startup(&mut self) {
+        match startup::scan_startup_entries() {
+            Ok(entries) => {
+                let count = entries.len();
+                self.startup_entries = entries;
+                self.view_mode = ViewMode::Startup;
+                self.startup_view.select(0);
+                self.status_message = format!("Found {count} startup entries");
+            }
+            Err(e) => self.status_message = format!("Startup scan failed: {e}"),
+        }
+    }
+
+    fn refresh_startup(&mut self) {
+        match startup::scan_startup_entries() {
+            Ok(entries) => {
+                self.startup_entries = entries;
+                self.status_message =
+                    format!("Refreshed — {} startup entries", self.startup_entries.len());
+            }
+            Err(e) => self.status_message = format!("Startup refresh failed: {e}"),
+        }
+    }
+
+    fn request_disable_startup(&mut self) {
+        let index = self.startup_view.selected_index();
+        let Some(entry) = self.startup_entries.get(index).cloned() else {
+            self.status_message = "No startup entry selected".to_string();
+            return;
+        };
+
+        if !self.is_elevated {
+            self.status_message =
+                "Administrator privileges required to disable startup entries".to_string();
+            return;
+        }
+
+        self.startup_confirm_target = Some(entry);
+        self.input_mode = InputMode::StartupConfirm;
+        self.status_message = "Confirm disable startup entry (y/n)".to_string();
+    }
+
+    fn execute_disable_startup(&mut self) {
+        let Some(entry) = self.startup_confirm_target.take() else {
+            return;
+        };
+
+        match startup::disable_startup_entry(&entry) {
+            Ok(()) => {
+                self.startup_entries.retain(|e| e.id != entry.id);
+                self.status_message = format!("Disabled startup entry: {}", entry.name);
+                if self.startup_view.selected_index() >= self.startup_entries.len()
+                    && !self.startup_entries.is_empty()
+                {
+                    self.startup_view
+                        .select(self.startup_entries.len().saturating_sub(1));
+                }
+            }
+            Err(e) => self.status_message = format!("Disable failed: {e}"),
+        }
+    }
+
     fn export_visible(&mut self) -> Result<()> {
         let indices = self.filtered_indices();
         let visible: Vec<ApplicationEntry> =
@@ -411,6 +501,9 @@ impl TuiApp {
             let show_force = self.input_mode == InputMode::ForceConfirm;
             let show_leftover_confirm = self.input_mode == InputMode::LeftoverConfirm;
             let leftover_confirm = self.leftover_confirm_target.clone();
+            let startup_entries = self.startup_entries.clone();
+            let show_startup_confirm = self.input_mode == InputMode::StartupConfirm;
+            let startup_confirm = self.startup_confirm_target.clone();
 
             terminal.draw(|frame| match view_mode {
                 ViewMode::Apps => {
@@ -467,6 +560,25 @@ impl TuiApp {
                         }
                     }
                 }
+                ViewMode::Startup => {
+                    self.startup_view.render(
+                        frame,
+                        frame.area(),
+                        &startup_entries,
+                        &status_message,
+                    );
+
+                    if show_startup_confirm {
+                        if let Some(entry) = &startup_confirm {
+                            dialogs::render_startup_confirm(
+                                frame,
+                                frame.area(),
+                                &entry.name,
+                                &entry.command,
+                            );
+                        }
+                    }
+                }
             })?;
 
             if event::poll(Duration::from_millis(250))? {
@@ -479,8 +591,10 @@ impl TuiApp {
                         &mut self.search_query,
                         &mut self.apps_view,
                         &mut self.leftovers_view,
+                        &mut self.startup_view,
                         filtered_count,
                         self.leftovers.len(),
+                        self.startup_entries.len(),
                     );
 
                     match action {
@@ -506,6 +620,7 @@ impl TuiApp {
                         Action::CancelUninstall => {
                             self.confirm_target = None;
                             self.leftover_confirm_target = None;
+                            self.startup_confirm_target = None;
                             self.uninstall_queue = None;
                             self.status_message = "Cancelled".to_string();
                         }
@@ -559,6 +674,14 @@ impl TuiApp {
                                 }
                             }
                         }
+                        Action::OpenStartup => self.open_startup(),
+                        Action::CloseStartup => {
+                            self.view_mode = ViewMode::Apps;
+                            self.status_message = "Returned to applications".to_string();
+                        }
+                        Action::RefreshStartup => self.refresh_startup(),
+                        Action::RequestDisableStartup => self.request_disable_startup(),
+                        Action::ConfirmDisableStartup => self.execute_disable_startup(),
                         Action::None => {}
                     }
                 }

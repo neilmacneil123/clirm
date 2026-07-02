@@ -1,12 +1,15 @@
 pub mod chocolatey;
+pub mod features;
 pub mod portable;
 pub mod registry;
 pub mod steam;
 pub mod store;
+pub mod updates;
 
 use crate::config::{Config, SortOrder};
 use crate::models::ApplicationEntry;
 use crate::protection::ProtectionList;
+use crate::ratings;
 use anyhow::Result;
 
 pub fn scan_applications(
@@ -43,6 +46,20 @@ pub fn scan_applications(
         }
     }
 
+    if config.scan_features {
+        match features::scan_windows_features() {
+            Ok(mut feature_apps) => apps.append(&mut feature_apps),
+            Err(e) => tracing::warn!("windows features scan failed: {e}"),
+        }
+    }
+
+    if config.scan_updates {
+        match updates::scan_windows_updates() {
+            Ok(mut update_apps) => apps.append(&mut update_apps),
+            Err(e) => tracing::warn!("windows updates scan failed: {e}"),
+        }
+    }
+
     if !config.show_system_components {
         apps.retain(|app| !app.is_system_component);
     }
@@ -53,6 +70,7 @@ pub fn scan_applications(
         }
     }
 
+    ratings::apply_ratings(&mut apps);
     sort_applications(&mut apps, config.default_sort);
     Ok(apps)
 }

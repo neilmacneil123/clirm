@@ -12,6 +12,8 @@ pub struct Config {
     pub scan_portable: bool,
     pub scan_steam: bool,
     pub scan_chocolatey: bool,
+    pub scan_features: bool,
+    pub scan_updates: bool,
     pub portable_scan_paths: Vec<String>,
 }
 
@@ -31,6 +33,8 @@ impl Default for Config {
             scan_portable: true,
             scan_steam: true,
             scan_chocolatey: true,
+            scan_features: true,
+            scan_updates: true,
             portable_scan_paths: vec![r"C:\Program Files".into(), r"C:\Program Files (x86)".into()],
         }
     }
@@ -95,6 +99,8 @@ mod tests {
             scan_portable: true,
             scan_steam: false,
             scan_chocolatey: true,
+            scan_features: false,
+            scan_updates: true,
             portable_scan_paths: vec![r"D:\Portable".into()],
         };
         let serialized = toml::to_string_pretty(&config).unwrap();

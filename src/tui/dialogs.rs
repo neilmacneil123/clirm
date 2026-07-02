@@ -39,6 +39,22 @@ pub fn render_force_confirm(frame: &mut Frame, area: Rect, app_name: &str) {
     frame.render_widget(paragraph, popup);
 }
 
+pub fn render_startup_confirm(frame: &mut Frame, area: Rect, name: &str, command: &str) {
+    let popup = centered_rect(65, 24, area);
+    frame.render_widget(Clear, popup);
+    let text =
+        format!("Disable startup entry?\n\n{name}\n{command}\n\nPress Y to confirm, N to cancel.");
+    let paragraph = Paragraph::new(text)
+        .style(Style::default().fg(Color::Yellow))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Disable Startup ")
+                .style(Style::default().add_modifier(Modifier::BOLD)),
+        );
+    frame.render_widget(paragraph, popup);
+}
+
 pub fn render_batch_confirm(frame: &mut Frame, area: Rect, count: usize) {
     let popup = centered_rect(60, 20, area);
     frame.render_widget(Clear, popup);
