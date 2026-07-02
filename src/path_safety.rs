@@ -96,7 +96,7 @@ fn is_under_allowed_root(path: &Path) -> bool {
     let path_str = path.to_string_lossy().to_ascii_lowercase();
     allowed_roots()
         .into_iter()
-        .any(|root| path_str.starts_with(&root))
+        .any(|root| path_str == root || path_str.starts_with(&format!("{root}\\")))
 }
 
 fn allowed_roots() -> Vec<String> {
@@ -152,5 +152,24 @@ mod tests {
     fn is_safe_install_location_rejects_empty() {
         assert!(!is_safe_install_location(""));
         assert!(!is_safe_install_location("   "));
+    }
+
+    #[test]
+    fn rejects_localappdata_prefix_without_separator_boundary() {
+        let local_app_data = std::env::var("LOCALAPPDATA")
+            .unwrap_or_else(|_| r"C:\Users\Test\AppData\Local".to_string());
+        let fake_suffix = format!(r"{local_app_data}Backup\Vendor\AppName");
+        assert!(validate_deletable_path(Path::new(&fake_suffix)).is_err());
+    }
+
+    #[test]
+    fn allows_exact_allowed_root_with_child() {
+        let local_app_data = std::env::var("LOCALAPPDATA")
+            .unwrap_or_else(|_| r"C:\Users\Test\AppData\Local".to_string());
+        let child = format!(r"{local_app_data}\Vendor\AppName");
+        if allowed_roots().is_empty() {
+            return;
+        }
+        assert!(validate_deletable_path(Path::new(&child)).is_ok());
     }
 }

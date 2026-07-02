@@ -1,6 +1,8 @@
 use crate::models::{ApplicationEntry, UninstallerType};
 use anyhow::{bail, Context, Result};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 /// Build the best available quiet uninstall command for an application.
 pub fn build_quiet_command(app: &ApplicationEntry) -> Result<String> {
@@ -105,44 +107,44 @@ fn apply_nsis_quiet(command: &str) -> String {
 pub fn run_with_gui_automation(command: &str, display_name: &str) -> Result<()> {
     tracing::info!("GUI automation uninstall {display_name}: {command}");
 
-    let child = Command::new("cmd")
+    let mut child = Command::new("cmd")
         .args(["/C", "start", "", "/wait", command])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("failed to launch uninstaller for {display_name}"))?;
 
-    let automation_err = dismiss_common_dialogs(display_name, command);
-    if let Err(e) = &automation_err {
-        tracing::warn!("GUI automation helper failed for {display_name}: {e}");
-    }
+    let automation_name = display_name.to_string();
+    let automation_command = command.to_string();
+    let automation_handle = thread::spawn(move || {
+        if let Err(e) = dismiss_common_dialogs(&automation_name, &automation_command) {
+            tracing::warn!("GUI automation helper failed for {automation_name}: {e}");
+        }
+    });
 
-    let output = child
-        .wait_with_output()
-        .with_context(|| format!("failed waiting for uninstaller {display_name}"))?;
+    let status = wait_for_child(&mut child, display_name)?;
+    let _ = automation_handle;
 
-    if output.status.success() {
+    if status.success() {
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stderr = stderr.trim();
-        let automation_note = automation_err
-            .err()
-            .map(|e| format!("; automation error: {e}"))
-            .unwrap_or_default();
-        if stderr.is_empty() {
-            bail!(
-                "GUI uninstaller exited with status {:?} for {}{automation_note}",
-                output.status.code(),
-                display_name
-            );
-        } else {
-            bail!(
-                "GUI uninstaller exited with status {:?} for {}: {}{automation_note}",
-                output.status.code(),
-                display_name,
-                stderr
-            );
+        bail!(
+            "GUI uninstaller exited with status {:?} for {}",
+            status.code(),
+            display_name
+        );
+    }
+}
+
+fn wait_for_child(child: &mut Child, display_name: &str) -> Result<std::process::ExitStatus> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("failed waiting for uninstaller {display_name}"))
+            }
         }
     }
 }
