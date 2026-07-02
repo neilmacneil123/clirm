@@ -248,11 +248,21 @@ fn push_item(
 
     items.push(JunkItem {
         id: path.clone(),
-        path,
+        path: path.clone(),
         kind,
         size_estimate,
         source_app: Some(source_app.to_string()),
+        confidence: junk_confidence_for(kind, &path),
     });
+}
+
+fn junk_confidence_for(kind: JunkKind, path: &str) -> u8 {
+    match kind {
+        JunkKind::RegistryKey if path.to_ascii_lowercase().contains(r"\uninstall\") => 95,
+        JunkKind::RegistryKey => 85,
+        JunkKind::Directory => 70,
+        JunkKind::File => 55,
+    }
 }
 
 fn estimate_path_size(path: &Path) -> Option<u64> {
@@ -367,6 +377,7 @@ mod tests {
             kind: JunkKind::RegistryKey,
             size_estimate: None,
             source_app: Some("Adobe".into()),
+            confidence: 85,
         };
         assert!(delete_junk_item(&item).is_err());
     }

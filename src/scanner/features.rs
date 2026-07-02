@@ -25,7 +25,8 @@ pub fn scan_windows_features() -> Result<Vec<ApplicationEntry>> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Get-WindowsOptionalFeature failed: {stderr}");
+        tracing::warn!("Get-WindowsOptionalFeature failed: {stderr}");
+        return Ok(Vec::new());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -68,7 +69,7 @@ pub fn scan_windows_features() -> Result<Vec<ApplicationEntry>> {
             size_estimate: None,
             install_date: None,
             is_protected: false,
-            is_system_component: true,
+            is_system_component: false,
             is_orphan: false,
             rating: None,
         });

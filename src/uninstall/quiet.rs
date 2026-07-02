@@ -18,6 +18,18 @@ pub fn build_quiet_command(app: &ApplicationEntry) -> Result<String> {
     Ok(apply_quiet_flags(uninstall, app.uninstaller_type))
 }
 
+/// Run the raw uninstall string without injecting quiet flags (BCU loud mode).
+pub fn run_loud_uninstall(app: &ApplicationEntry) -> Result<()> {
+    let command = app
+        .uninstall_string
+        .as_deref()
+        .or(app.quiet_uninstall_string.as_deref())
+        .with_context(|| format!("no uninstall command for {}", app.display_name))?;
+
+    tracing::info!("loud uninstall {}: {}", app.display_name, command);
+    run_command(command)
+}
+
 /// Run an uninstall command, falling back to basic GUI automation for loud uninstallers.
 pub fn run_quiet_uninstall(app: &ApplicationEntry) -> Result<()> {
     let command = build_quiet_command(app)?;

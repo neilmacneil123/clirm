@@ -82,13 +82,24 @@ pub struct ApplicationEntry {
 
 impl ApplicationEntry {
     pub fn can_uninstall(&self) -> bool {
-        !self.is_protected
-            && !self.is_system_component
-            && (self.uninstall_string.is_some() || self.quiet_uninstall_string.is_some())
+        if self.is_protected {
+            return false;
+        }
+        if self.is_system_component && !Self::is_windows_managed_source(self.source) {
+            return false;
+        }
+        self.uninstall_string.is_some() || self.quiet_uninstall_string.is_some()
+    }
+
+    fn is_windows_managed_source(source: AppSource) -> bool {
+        matches!(source, AppSource::WindowsFeature | AppSource::WindowsUpdate)
     }
 
     pub fn can_force_uninstall(&self) -> bool {
-        if self.is_protected || self.is_system_component {
+        if self.is_protected {
+            return false;
+        }
+        if self.is_system_component && !Self::is_windows_managed_source(self.source) {
             return false;
         }
 
@@ -145,6 +156,13 @@ impl StartupLocation {
             Self::RunKeyLocalMachine | Self::RunKeyLocalMachineWow | Self::RunKeyCurrentUser
         )
     }
+
+    pub fn requires_elevation(self) -> bool {
+        matches!(
+            self,
+            Self::RunKeyLocalMachine | Self::RunKeyLocalMachineWow | Self::StartupFolderAllUsers
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +172,10 @@ pub struct StartupEntry {
     pub command: String,
     pub location: StartupLocation,
     pub enabled: bool,
+    pub registry_hive: Option<String>,
+    pub registry_path: Option<String>,
+    pub registry_value_name: Option<String>,
+    pub folder_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +185,8 @@ pub struct JunkItem {
     pub kind: JunkKind,
     pub size_estimate: Option<u64>,
     pub source_app: Option<String>,
+    /// BCU-style confidence score (0-100); higher is safer to delete.
+    pub confidence: u8,
 }
 
 #[cfg(test)]

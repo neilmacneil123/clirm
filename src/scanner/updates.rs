@@ -21,10 +21,17 @@ fn is_update_entry(display_name: &str, parent_key: Option<&str>) -> bool {
     }
 
     let lower = display_name.to_lowercase();
-    lower.contains("update for")
+    if lower.contains("update for")
         || lower.starts_with("security update")
         || lower.starts_with("hotfix")
-        || lower.contains("kb")
+        || lower.starts_with("update for microsoft")
+    {
+        return true;
+    }
+
+    regex::Regex::new(r"(?i)\bKB\d+\b")
+        .ok()
+        .is_some_and(|re| re.is_match(display_name))
 }
 
 fn scan_hive(root: RegKey, hive_label: &str, path: &str) -> Result<Vec<ApplicationEntry>> {
@@ -78,7 +85,7 @@ fn scan_hive(root: RegKey, hive_label: &str, path: &str) -> Result<Vec<Applicati
             is_protected: read_dword(&subkey, "NoRemove")
                 .map(|v| v != 0)
                 .unwrap_or(false),
-            is_system_component: true,
+            is_system_component: false,
             is_orphan: false,
             rating: None,
         });
@@ -152,7 +159,7 @@ fn scan_hotfixes() -> Result<Vec<ApplicationEntry>> {
             size_estimate: None,
             install_date: hf.installed_on,
             is_protected: false,
-            is_system_component: true,
+            is_system_component: false,
             is_orphan: false,
             rating: None,
         });
@@ -192,4 +199,27 @@ pub fn scan_windows_updates() -> Result<Vec<ApplicationEntry>> {
     }
 
     Ok(all)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_update_entry;
+
+    #[test]
+    fn update_entry_matches_kb_pattern() {
+        assert!(is_update_entry(
+            "Security Update for Windows (KB5034123)",
+            None
+        ));
+    }
+
+    #[test]
+    fn update_entry_rejects_unrelated_kb_substring() {
+        assert!(!is_update_entry("Adobe Acrobat Reader", None));
+    }
+
+    #[test]
+    fn update_entry_matches_parent_key() {
+        assert!(is_update_entry("Some Child", Some("parent-guid")));
+    }
 }

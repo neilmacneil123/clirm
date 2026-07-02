@@ -40,6 +40,14 @@ impl FilterPreset {
             Self::Bcul => Self::All,
         }
     }
+
+    pub fn next_available(self, has_bcul: bool) -> Self {
+        let mut next = self.next();
+        while next == Self::Bcul && !has_bcul {
+            next = next.next();
+        }
+        next
+    }
 }
 
 const LARGE_THRESHOLD: u64 = 500 * 1024 * 1024;
@@ -154,6 +162,12 @@ mod tests {
             app(AppSource::Store, "B", None, false),
         ];
         assert_eq!(apply_preset(&apps, FilterPreset::Store, None), vec![1]);
+    }
+
+    #[test]
+    fn next_available_skips_bcul_without_list() {
+        assert_eq!(FilterPreset::Risky.next_available(false), FilterPreset::All);
+        assert_eq!(FilterPreset::Risky.next_available(true), FilterPreset::Bcul);
     }
 
     #[test]

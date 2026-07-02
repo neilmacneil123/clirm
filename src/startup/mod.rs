@@ -1,5 +1,6 @@
+use crate::config::Config;
 use crate::models::{StartupEntry, StartupLocation};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,6 +9,7 @@ use winreg::RegKey;
 
 const RUN_PATH: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
 const RUN_WOW_PATH: &str = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run";
+const RUN_DISABLED_SUFFIX: &str = "-Disabled";
 
 fn scan_run_key(
     root: RegKey,
@@ -31,11 +33,15 @@ fn scan_run_key(
         }
 
         entries.push(StartupEntry {
-            id: format!("{hive_label}|{path}|{name}"),
+            id: format!("reg:{hive_label}:{path}:{name}"),
             name: name.clone(),
             command,
             location,
             enabled: true,
+            registry_hive: Some(hive_label.to_string()),
+            registry_path: Some(path.to_string()),
+            registry_value_name: Some(name),
+            folder_path: None,
         });
     }
 
@@ -58,11 +64,15 @@ fn scan_startup_folder(path: &Path, location: StartupLocation) -> Result<Vec<Sta
         let full_path = entry.path();
         let command = full_path.to_string_lossy().into_owned();
         entries.push(StartupEntry {
-            id: format!("folder:{}\\{file_name}", path.display()),
+            id: format!("folder:{}", full_path.display()),
             name: file_name,
-            command,
+            command: command.clone(),
             location,
             enabled: true,
+            registry_hive: None,
+            registry_path: None,
+            registry_value_name: None,
+            folder_path: Some(command),
         });
     }
 
@@ -128,33 +138,89 @@ pub fn disable_startup_entry(entry: &StartupEntry) -> Result<()> {
     }
 }
 
-fn disable_registry_run_value(entry: &StartupEntry) -> Result<()> {
-    let parts: Vec<&str> = entry.id.split('|').collect();
-    if parts.len() != 3 {
-        anyhow::bail!("invalid startup entry id: {}", entry.id);
+fn disabled_run_path(path: &str) -> String {
+    if path.ends_with(RUN_DISABLED_SUFFIX) {
+        path.to_string()
+    } else {
+        format!("{path}{RUN_DISABLED_SUFFIX}")
     }
+}
 
-    let hive = match parts[0] {
+fn disable_registry_run_value(entry: &StartupEntry) -> Result<()> {
+    let hive_label = entry
+        .registry_hive
+        .as_deref()
+        .context("missing registry hive on startup entry")?;
+    let path = entry
+        .registry_path
+        .as_deref()
+        .context("missing registry path on startup entry")?;
+    let value_name = entry
+        .registry_value_name
+        .as_deref()
+        .context("missing registry value name on startup entry")?;
+
+    let hive = match hive_label {
         "HKLM" => HKEY_LOCAL_MACHINE,
         "HKCU" => HKEY_CURRENT_USER,
-        other => anyhow::bail!("unsupported hive: {other}"),
+        other => bail!("unsupported hive: {other}"),
     };
-    let path = parts[1];
-    let value_name = parts[2];
 
-    let key = RegKey::predef(hive)
-        .open_subkey_with_flags(path, KEY_SET_VALUE)
+    let run_key = RegKey::predef(hive)
+        .open_subkey_with_flags(path, KEY_READ | KEY_SET_VALUE)
         .with_context(|| format!("failed to open registry key {path}"))?;
-    key.delete_value(value_name)
-        .with_context(|| format!("failed to delete run value {value_name}"))?;
+    let command: String = run_key
+        .get_value(value_name)
+        .with_context(|| format!("startup value {value_name} not found"))?;
+
+    let backup_path = disabled_run_path(path);
+    let backup_key = RegKey::predef(hive)
+        .create_subkey(&backup_path)
+        .with_context(|| format!("failed to create backup key {backup_path}"))?
+        .0;
+    backup_key
+        .set_value(value_name, &command)
+        .with_context(|| format!("failed to back up startup value {value_name}"))?;
+
+    run_key
+        .delete_value(value_name)
+        .with_context(|| format!("failed to remove startup value {value_name}"))?;
     Ok(())
 }
 
+fn startup_backup_dir() -> Result<PathBuf> {
+    let dir = Config::config_dir()?.join("startup-backup");
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create backup directory {}", dir.display()))?;
+    Ok(dir)
+}
+
 fn disable_startup_folder_item(entry: &StartupEntry) -> Result<()> {
-    let path = Path::new(&entry.command);
-    if path.exists() {
-        fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))?;
+    let source = entry
+        .folder_path
+        .as_deref()
+        .or(Some(entry.command.as_str()))
+        .context("missing folder path on startup entry")?;
+    let path = Path::new(source);
+    if !path.exists() {
+        bail!("startup file not found: {}", path.display());
     }
+
+    let backup_dir = startup_backup_dir()?;
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("startup-item");
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let backup_path = backup_dir.join(format!("{file_name}-{stamp}"));
+
+    fs::rename(path, &backup_path).with_context(|| {
+        format!(
+            "failed to move {} to backup {}",
+            path.display(),
+            backup_path.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -168,5 +234,13 @@ mod tests {
         for window in entries.windows(2) {
             assert!(window[0].name.to_lowercase() <= window[1].name.to_lowercase());
         }
+    }
+
+    #[test]
+    fn disabled_run_path_appends_suffix() {
+        assert_eq!(
+            disabled_run_path(RUN_PATH),
+            format!("{RUN_PATH}{RUN_DISABLED_SUFFIX}")
+        );
     }
 }

@@ -1,5 +1,5 @@
 use crate::models::ApplicationEntry;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use regex::Regex;
 use std::fs;
 use std::path::Path;
@@ -15,14 +15,15 @@ pub enum ComparisonMethod {
 }
 
 impl ComparisonMethod {
-    fn from_str(value: &str) -> Self {
+    fn from_str(value: &str) -> Result<Self> {
         match value {
-            "Equals" => Self::Equals,
-            "StartsWith" => Self::StartsWith,
-            "EndsWith" => Self::EndsWith,
-            "Contains" => Self::Contains,
-            "Regex" => Self::Regex,
-            _ => Self::Any,
+            "Equals" => Ok(Self::Equals),
+            "Any" => Ok(Self::Any),
+            "StartsWith" => Ok(Self::StartsWith),
+            "EndsWith" => Ok(Self::EndsWith),
+            "Contains" => Ok(Self::Contains),
+            "Regex" => Ok(Self::Regex),
+            other => bail!("unknown ComparisonMethod: {other}"),
         }
     }
 }
@@ -34,6 +35,7 @@ pub struct FilterCondition {
     pub target_property: String,
     pub invert_results: bool,
     pub enabled: bool,
+    regex: Option<Regex>,
 }
 
 #[derive(Debug, Clone)]
@@ -164,17 +166,36 @@ impl FilterCondition {
                 app.version.clone().unwrap_or_default(),
                 app.id.clone(),
                 app.source.label().to_string(),
+                app.install_location.clone().unwrap_or_default(),
+                app.uninstall_string.clone().unwrap_or_default(),
+                app.quiet_uninstall_string.clone().unwrap_or_default(),
+                app.uninstaller_type.label().to_string(),
+                app.install_date.clone().unwrap_or_default(),
+                app.size_estimate.map(|s| s.to_string()).unwrap_or_default(),
+                app.rating.map(|r| r.to_string()).unwrap_or_default(),
             ];
         }
 
         let value = match self.target_property.to_ascii_lowercase().as_str() {
-            "displayname" | "name" => Some(app.display_name.clone()),
+            "displayname" | "name" | "rawdisplayname" => Some(app.display_name.clone()),
             "publisher" => app.publisher.clone(),
             "version" | "displayversion" => app.version.clone(),
-            "id" | "registrykeyname" => Some(app.id.clone()),
+            "id" | "registrykeyname" | "ratingid" => Some(app.id.clone()),
             "source" | "abouturl" => Some(app.source.label().to_string()),
             "installlocation" => app.install_location.clone(),
-            _ => None,
+            "uninstallstring" => app.uninstall_string.clone(),
+            "quietuninstallstring" => app.quiet_uninstall_string.clone(),
+            "uninstallertype" | "uninstallkind" => Some(app.uninstaller_type.label().to_string()),
+            "installdate" => app.install_date.clone(),
+            "estimatedsize" | "size" => app.size_estimate.map(|s| s.to_string()),
+            "rating" | "averagerating" => app.rating.map(|r| r.to_string()),
+            "isprotected" => Some(app.is_protected.to_string()),
+            "issystemcomponent" | "systemcomponent" => Some(app.is_system_component.to_string()),
+            "isorphan" | "orphan" => Some(app.is_orphan.to_string()),
+            other => {
+                tracing::warn!("unknown BCUL TargetPropertyId: {other}");
+                None
+            }
         };
         value.map(|v| vec![v]).unwrap_or_default()
     }
@@ -192,9 +213,7 @@ impl FilterCondition {
             ComparisonMethod::Contains => target
                 .to_ascii_lowercase()
                 .contains(&filter.to_ascii_lowercase()),
-            ComparisonMethod::Regex => Regex::new(filter)
-                .map(|re| re.is_match(target))
-                .unwrap_or(false),
+            ComparisonMethod::Regex => self.regex.as_ref().is_some_and(|re| re.is_match(target)),
             ComparisonMethod::Any => filter.split_whitespace().any(|token| {
                 target
                     .to_ascii_lowercase()
@@ -211,7 +230,7 @@ fn parse_bcul_xml(xml: &str) -> Result<BculList> {
     let root = doc.root_element();
 
     if root.tag_name().name() != "UninstallList" {
-        anyhow::bail!(
+        bail!(
             "expected root element UninstallList, found {}",
             root.tag_name().name()
         );
@@ -227,22 +246,20 @@ fn parse_bcul_xml(xml: &str) -> Result<BculList> {
         filters.push(parse_filter(filter_node)?);
     }
 
-    if filters.is_empty() {
-        for filters_node in root
+    for filters_node in root
+        .children()
+        .filter(|n| n.is_element() && n.tag_name().name() == "Filters")
+    {
+        for filter_node in filters_node
             .children()
-            .filter(|n| n.is_element() && n.tag_name().name() == "Filters")
+            .filter(|n| n.is_element() && n.tag_name().name() == "Filter")
         {
-            for filter_node in filters_node
-                .children()
-                .filter(|n| n.is_element() && n.tag_name().name() == "Filter")
-            {
-                filters.push(parse_filter(filter_node)?);
-            }
+            filters.push(parse_filter(filter_node)?);
         }
     }
 
     if filters.is_empty() {
-        anyhow::bail!("uninstall list contains no filters");
+        bail!("uninstall list contains no filters");
     }
 
     Ok(BculList { enabled, filters })
@@ -261,10 +278,10 @@ fn parse_filter(node: roxmltree::Node<'_, '_>) -> Result<BculFilter> {
                     .children()
                     .filter(|n| n.is_element() && n.tag_name().name() == "FilterCondition")
                 {
-                    conditions.push(parse_condition(cond_node));
+                    conditions.push(parse_condition(cond_node)?);
                 }
             }
-            "FilterCondition" => conditions.push(parse_condition(child)),
+            "FilterCondition" => conditions.push(parse_condition(child)?),
             _ => {}
         }
     }
@@ -277,6 +294,7 @@ fn parse_filter(node: roxmltree::Node<'_, '_>) -> Result<BculFilter> {
                 target_property: String::new(),
                 invert_results: false,
                 enabled: true,
+                regex: None,
             });
         }
     }
@@ -289,10 +307,11 @@ fn parse_filter(node: roxmltree::Node<'_, '_>) -> Result<BculFilter> {
     })
 }
 
-fn parse_condition(node: roxmltree::Node<'_, '_>) -> FilterCondition {
+fn parse_condition(node: roxmltree::Node<'_, '_>) -> Result<FilterCondition> {
     let filter_text = text_child(node, "FilterText").unwrap_or_default();
     let method = text_child(node, "ComparisonMethod")
         .map(|s| ComparisonMethod::from_str(&s))
+        .transpose()?
         .unwrap_or(ComparisonMethod::Any);
     let target_property = text_child(node, "TargetPropertyId")
         .or_else(|| text_child(node, "TargetProperty"))
@@ -300,13 +319,23 @@ fn parse_condition(node: roxmltree::Node<'_, '_>) -> FilterCondition {
     let invert_results = parse_bool_child(&node, "InvertResults", false);
     let enabled = parse_bool_child(&node, "Enabled", true);
 
-    FilterCondition {
+    let regex = if method == ComparisonMethod::Regex {
+        Some(
+            Regex::new(&filter_text)
+                .with_context(|| format!("invalid regex in BCUL filter: {filter_text}"))?,
+        )
+    } else {
+        None
+    };
+
+    Ok(FilterCondition {
         filter_text,
         comparison_method: method,
         target_property,
         invert_results,
         enabled,
-    }
+        regex,
+    })
 }
 
 fn text_child(node: roxmltree::Node<'_, '_>, tag: &str) -> Option<String> {
@@ -402,5 +431,67 @@ mod tests {
         let list = parse_bcul_xml(xml).unwrap();
         assert_eq!(list.test_entry(&app("Mozilla Firefox")), Some(false));
         assert!(list.test_entry(&app("7-Zip")).unwrap());
+    }
+
+    #[test]
+    fn parses_mixed_direct_and_nested_filters() {
+        let xml = r#"<?xml version="1.0"?>
+<UninstallList>
+  <Filter>
+    <Exclude>false</Exclude>
+    <ComparisonEntries>
+      <FilterCondition>
+        <FilterText>Alpha</FilterText>
+        <ComparisonMethod>Contains</ComparisonMethod>
+      </FilterCondition>
+    </ComparisonEntries>
+  </Filter>
+  <Filters>
+    <Filter>
+      <Exclude>false</Exclude>
+      <ComparisonEntries>
+        <FilterCondition>
+          <FilterText>Beta</FilterText>
+          <ComparisonMethod>Contains</ComparisonMethod>
+        </FilterCondition>
+      </ComparisonEntries>
+    </Filter>
+  </Filters>
+</UninstallList>"#;
+        let list = parse_bcul_xml(xml).unwrap();
+        assert!(list.test_entry(&app("Alpha App")).unwrap());
+        assert!(list.test_entry(&app("Beta App")).unwrap());
+    }
+
+    #[test]
+    fn invalid_regex_fails_parse() {
+        let xml = r#"<?xml version="1.0"?>
+<UninstallList>
+  <Filter>
+    <ComparisonEntries>
+      <FilterCondition>
+        <FilterText>[unclosed</FilterText>
+        <ComparisonMethod>Regex</ComparisonMethod>
+      </FilterCondition>
+    </ComparisonEntries>
+  </Filter>
+</UninstallList>"#;
+        assert!(parse_bcul_xml(xml).is_err());
+    }
+
+    #[test]
+    fn unknown_comparison_method_fails_parse() {
+        let xml = r#"<?xml version="1.0"?>
+<UninstallList>
+  <Filter>
+    <ComparisonEntries>
+      <FilterCondition>
+        <FilterText>test</FilterText>
+        <ComparisonMethod>NotARealMethod</ComparisonMethod>
+      </FilterCondition>
+    </ComparisonEntries>
+  </Filter>
+</UninstallList>"#;
+        assert!(parse_bcul_xml(xml).is_err());
     }
 }

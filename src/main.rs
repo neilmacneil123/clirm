@@ -22,7 +22,8 @@ fn main() -> Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let cli = cli::Cli::parse();
+    let args = cli::normalize_bcu_args(std::env::args());
+    let cli = cli::Cli::parse_from(args);
 
     if cli.command.is_some() {
         return cli::run(cli);

@@ -411,9 +411,9 @@ impl TuiApp {
             return;
         };
 
-        if !self.is_elevated {
+        if entry.location.requires_elevation() && !self.is_elevated {
             self.status_message =
-                "Administrator privileges required to disable startup entries".to_string();
+                "Administrator privileges required for this startup entry".to_string();
             return;
         }
 
@@ -636,9 +636,15 @@ impl TuiApp {
                             self.apps_view.select_all(&visible);
                         }
                         Action::CycleFilter => {
-                            self.filter_preset = self.filter_preset.next();
+                            let has_bcul = self.bcul_filter.is_some();
+                            self.filter_preset = self.filter_preset.next_available(has_bcul);
                             self.apps_view.select(0);
-                            self.status_message = format!("Filter: {}", self.filter_preset.label());
+                            self.status_message =
+                                if self.filter_preset == FilterPreset::Bcul && !has_bcul {
+                                    "No BCUL list loaded".to_string()
+                                } else {
+                                    format!("Filter: {}", self.filter_preset.label())
+                                };
                         }
                         Action::ToggleRegex => {
                             self.use_regex = !self.use_regex;
