@@ -1,13 +1,11 @@
 use crate::models::{ApplicationEntry, UninstallerType};
 use anyhow::{bail, Context, Result};
 use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
 
 /// Build the best available quiet uninstall command for an application.
 pub fn build_quiet_command(app: &ApplicationEntry) -> Result<String> {
-    if let Some(ref quiet) = app.quiet_uninstall_string {
-        return Ok(quiet.clone());
+    if let Some(quiet) = app.quiet_uninstall_string.as_deref() {
+        return Ok(quiet.to_string());
     }
 
     let uninstall = app
@@ -31,30 +29,35 @@ pub fn run_quiet_uninstall(app: &ApplicationEntry) -> Result<()> {
                 app.display_name
             );
             let loud = app.uninstall_string.as_deref().unwrap_or(&command);
-            run_with_gui_automation(loud, &app.display_name)
+            run_with_gui_automation(loud, &app.display_name).with_context(|| {
+                format!(
+                    "quiet uninstall failed and GUI automation did not succeed for {}",
+                    app.display_name
+                )
+            })
         }
         Err(e) => Err(e),
     }
 }
 
-fn needs_gui_automation(app: &ApplicationEntry) -> bool {
+/// Best-effort GUI automation is only attempted for loud/unknown uninstallers.
+pub(crate) fn needs_gui_automation(app: &ApplicationEntry) -> bool {
     app.uninstaller_type == UninstallerType::Unknown
         || app.quiet_uninstall_string.is_none() && !has_quiet_flags(app)
 }
 
-fn has_quiet_flags(app: &ApplicationEntry) -> bool {
+pub(crate) fn has_quiet_flags(app: &ApplicationEntry) -> bool {
     let cmd = app.uninstall_string.as_deref().unwrap_or("");
-    let lower = cmd.to_lowercase();
     matches!(
         app.uninstaller_type,
         UninstallerType::Msi
             | UninstallerType::InnoSetup
             | UninstallerType::Nsis
             | UninstallerType::StoreApp
-    ) || lower.contains("/s")
-        || lower.contains("/silent")
-        || lower.contains("/quiet")
-        || lower.contains("/qn")
+    ) || contains_ascii_ci(cmd, "/s")
+        || contains_ascii_ci(cmd, "/silent")
+        || contains_ascii_ci(cmd, "/quiet")
+        || contains_ascii_ci(cmd, "/qn")
 }
 
 pub fn apply_quiet_flags(command: &str, uninstaller_type: UninstallerType) -> String {
@@ -68,8 +71,7 @@ pub fn apply_quiet_flags(command: &str, uninstaller_type: UninstallerType) -> St
 }
 
 fn apply_msi_quiet(command: &str) -> String {
-    let lower = command.to_lowercase();
-    if lower.contains("/qn") || lower.contains("/quiet") {
+    if contains_ascii_ci(command, "/qn") || contains_ascii_ci(command, "/quiet") {
         return command.to_string();
     }
 
@@ -85,22 +87,21 @@ fn apply_msi_quiet(command: &str) -> String {
 }
 
 fn apply_inno_quiet(command: &str) -> String {
-    let lower = command.to_lowercase();
-    if lower.contains("/silent") || lower.contains("/verysilent") {
+    if contains_ascii_ci(command, "/silent") || contains_ascii_ci(command, "/verysilent") {
         return command.to_string();
     }
     format!("{command} /VERYSILENT /NORESTART")
 }
 
 fn apply_nsis_quiet(command: &str) -> String {
-    let lower = command.to_lowercase();
-    if lower.contains(" /s") || lower.ends_with("/s") {
+    if contains_ascii_ci(command, " /s") || command.ends_with("/S") || command.ends_with("/s") {
         return command.to_string();
     }
     format!("{command} /S")
 }
 
 /// Launch a loud uninstaller and attempt to dismiss common confirmation dialogs.
+/// Automation is best-effort and intended for `Unknown` uninstaller types only.
 pub fn run_with_gui_automation(command: &str, display_name: &str) -> Result<()> {
     tracing::info!("GUI automation uninstall {display_name}: {command}");
 
@@ -111,8 +112,10 @@ pub fn run_with_gui_automation(command: &str, display_name: &str) -> Result<()> 
         .spawn()
         .with_context(|| format!("failed to launch uninstaller for {display_name}"))?;
 
-    thread::sleep(Duration::from_secs(2));
-    dismiss_common_dialogs(display_name);
+    let automation_err = dismiss_common_dialogs(display_name, command);
+    if let Err(e) = &automation_err {
+        tracing::warn!("GUI automation helper failed for {display_name}: {e}");
+    }
 
     let output = child
         .wait_with_output()
@@ -123,15 +126,19 @@ pub fn run_with_gui_automation(command: &str, display_name: &str) -> Result<()> 
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stderr = stderr.trim();
+        let automation_note = automation_err
+            .err()
+            .map(|e| format!("; automation error: {e}"))
+            .unwrap_or_default();
         if stderr.is_empty() {
             bail!(
-                "GUI uninstaller exited with status {:?} for {}",
+                "GUI uninstaller exited with status {:?} for {}{automation_note}",
                 output.status.code(),
                 display_name
             );
         } else {
             bail!(
-                "GUI uninstaller exited with status {:?} for {}: {}",
+                "GUI uninstaller exited with status {:?} for {}: {}{automation_note}",
                 output.status.code(),
                 display_name,
                 stderr
@@ -140,24 +147,30 @@ pub fn run_with_gui_automation(command: &str, display_name: &str) -> Result<()> 
     }
 }
 
-fn dismiss_common_dialogs(display_name: &str) {
+fn dismiss_common_dialogs(display_name: &str, command: &str) -> Result<()> {
+    let escaped_name = escape_powershell_single_quoted(display_name);
+    let exe_hint = extract_exe_hint(command)
+        .map(|hint| escape_powershell_single_quoted(&hint))
+        .unwrap_or_default();
+
     let script = format!(
         r#"
 $wshell = New-Object -ComObject WScript.Shell
-$title = '{display_name}'
-for ($i = 0; $i -lt 8; $i++) {{
-    if ($wshell.AppActivate($title)) {{
-        $wshell.SendKeys('{{ENTER}}')
-        Start-Sleep -Milliseconds 500
+$titles = @('{escaped_name}', '{exe_hint}') | Where-Object {{ $_ }}
+$deadline = (Get-Date).AddSeconds(30)
+while ((Get-Date) -lt $deadline) {{
+    foreach ($title in $titles) {{
+        if ($wshell.AppActivate($title)) {{
+            $wshell.SendKeys('{{ENTER}}')
+            Start-Sleep -Milliseconds 300
+        }}
     }}
-    $wshell.SendKeys('{{ENTER}}')
-    $wshell.SendKeys('{{TAB}}')
     Start-Sleep -Milliseconds 500
 }}
 "#
     );
 
-    let _ = Command::new("powershell")
+    let status = Command::new("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -167,8 +180,50 @@ for ($i = 0; $i -lt 8; $i++) {{
             &script,
         ])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+        .stderr(Stdio::piped())
+        .status()
+        .context("failed to launch GUI automation helper")?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        bail!(
+            "GUI automation helper exited with status {:?}",
+            status.code()
+        );
+    }
+}
+
+fn escape_powershell_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn extract_exe_hint(command: &str) -> Option<String> {
+    let token = command.split_whitespace().next()?;
+    let path = std::path::Path::new(token);
+    let file_name = path.file_name()?.to_string_lossy();
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| file_name.to_string());
+    if stem.is_empty() {
+        None
+    } else {
+        Some(stem)
+    }
+}
+
+fn contains_ascii_ci(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+
+    haystack.as_bytes().windows(needle.len()).any(|window| {
+        window
+            .iter()
+            .zip(needle.bytes())
+            .all(|(a, b)| a.eq_ignore_ascii_case(&b))
+    })
 }
 
 fn run_command(command: &str) -> Result<()> {
@@ -200,6 +255,26 @@ fn run_command(command: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::models::AppSource;
+
+    fn sample_app(uninstaller_type: UninstallerType) -> ApplicationEntry {
+        ApplicationEntry {
+            id: "test".into(),
+            display_name: "Test".into(),
+            version: None,
+            publisher: None,
+            source: AppSource::Registry,
+            install_location: None,
+            uninstall_string: Some("cmd".into()),
+            quiet_uninstall_string: None,
+            uninstaller_type,
+            size_estimate: None,
+            install_date: None,
+            is_protected: false,
+            is_system_component: false,
+            is_orphan: false,
+            rating: None,
+        }
+    }
 
     #[test]
     fn msi_adds_quiet_flags() {
@@ -241,5 +316,61 @@ mod tests {
         };
         let cmd = build_quiet_command(&app).unwrap();
         assert_eq!(cmd, r#"C:\App\uninst.exe /SILENT"#);
+    }
+
+    #[test]
+    fn build_quiet_command_fails_without_uninstall_string() {
+        let mut app = sample_app(UninstallerType::Unknown);
+        app.uninstall_string = None;
+        assert!(build_quiet_command(&app).is_err());
+    }
+
+    #[test]
+    fn needs_gui_automation_for_unknown_type() {
+        let app = sample_app(UninstallerType::Unknown);
+        assert!(needs_gui_automation(&app));
+    }
+
+    #[test]
+    fn needs_gui_automation_false_for_msi_with_flags() {
+        let mut app = sample_app(UninstallerType::Msi);
+        app.uninstall_string = Some(r#"msiexec /X {GUID}"#.into());
+        assert!(!needs_gui_automation(&app));
+    }
+
+    #[test]
+    fn has_quiet_flags_detects_silent_suffix() {
+        let mut app = sample_app(UninstallerType::InnoSetup);
+        app.uninstall_string = Some(r#"C:\uninst.exe /SILENT"#.into());
+        assert!(has_quiet_flags(&app));
+        assert!(!needs_gui_automation(&app));
+    }
+
+    #[test]
+    fn escape_powershell_single_quoted_doubles_apostrophes() {
+        assert_eq!(escape_powershell_single_quoted("O'Brien"), "O''Brien");
+    }
+
+    #[test]
+    fn extract_exe_hint_from_quoted_path() {
+        assert_eq!(
+            extract_exe_hint(r#""C:\App\unins000.exe" /SILENT"#),
+            Some("unins000".to_string())
+        );
+    }
+
+    #[test]
+    fn run_quiet_uninstall_fails_for_missing_command() {
+        let mut app = sample_app(UninstallerType::Unknown);
+        app.uninstall_string = None;
+        assert!(run_quiet_uninstall(&app).is_err());
+    }
+
+    #[test]
+    fn run_quiet_uninstall_does_not_fallback_for_msi_failure() {
+        let mut app = sample_app(UninstallerType::Msi);
+        app.uninstall_string = Some("cmd /C exit 1".into());
+        let err = run_quiet_uninstall(&app).unwrap_err();
+        assert!(!err.to_string().contains("GUI automation"));
     }
 }

@@ -33,6 +33,7 @@ pub struct TuiApp {
     leftovers_view: LeftoversView,
     leftovers: Vec<JunkItem>,
     leftovers_target: Option<String>,
+    leftover_confirm_target: Option<JunkItem>,
     view_mode: ViewMode,
     search_query: String,
     input_mode: InputMode,
@@ -56,6 +57,7 @@ impl TuiApp {
             leftovers_view: LeftoversView::new(),
             leftovers: Vec::new(),
             leftovers_target: None,
+            leftover_confirm_target: None,
             view_mode: ViewMode::Apps,
             search_query: String::new(),
             input_mode: InputMode::Normal,
@@ -207,13 +209,20 @@ impl TuiApp {
         Ok(())
     }
 
+    fn leftovers_target_display_name(&self) -> Option<String> {
+        self.leftovers_target
+            .as_ref()
+            .and_then(|id| self.apps.iter().find(|a| &a.id == id))
+            .map(|app| app.display_name.clone())
+    }
+
     fn open_leftovers(&mut self) {
         if let Some(app) = self.selected_app().cloned() {
             match scan_for_app(&app) {
                 Ok(items) => {
                     let count = items.len();
                     self.leftovers = items;
-                    self.leftovers_target = Some(app.display_name.clone());
+                    self.leftovers_target = Some(app.id.clone());
                     self.view_mode = ViewMode::Leftovers;
                     self.leftovers_view.select(0);
                     self.status_message =
@@ -242,8 +251,8 @@ impl TuiApp {
     }
 
     fn rescan_leftovers(&mut self) {
-        if let Some(name) = self.leftovers_target.clone() {
-            let app = self.apps.iter().find(|a| a.display_name == name).cloned();
+        if let Some(id) = self.leftovers_target.clone() {
+            let app = self.apps.iter().find(|a| a.id == id).cloned();
             if let Some(app) = app {
                 match scan_for_app(&app) {
                     Ok(items) => {
@@ -270,7 +279,7 @@ impl TuiApp {
         }
     }
 
-    fn delete_selected_leftover(&mut self) {
+    fn request_delete_leftover(&mut self) {
         let index = self.leftovers_view.selected_index();
         let Some(item) = self.leftovers.get(index).cloned() else {
             self.status_message = "No leftover selected".to_string();
@@ -282,6 +291,16 @@ impl TuiApp {
                 "Administrator privileges required to delete leftovers".to_string();
             return;
         }
+
+        self.leftover_confirm_target = Some(item);
+        self.input_mode = InputMode::LeftoverConfirm;
+        self.status_message = "Confirm leftover deletion (y/n)".to_string();
+    }
+
+    fn execute_delete_leftover(&mut self) {
+        let Some(item) = self.leftover_confirm_target.take() else {
+            return;
+        };
 
         match delete_junk_item(&item) {
             Ok(()) => {
@@ -388,8 +407,10 @@ impl TuiApp {
             let use_regex = self.use_regex;
             let view_mode = self.view_mode;
             let leftovers = self.leftovers.clone();
-            let leftovers_target = self.leftovers_target.clone();
+            let leftovers_target = self.leftovers_target_display_name();
             let show_force = self.input_mode == InputMode::ForceConfirm;
+            let show_leftover_confirm = self.input_mode == InputMode::LeftoverConfirm;
+            let leftover_confirm = self.leftover_confirm_target.clone();
 
             terminal.draw(|frame| match view_mode {
                 ViewMode::Apps => {
@@ -434,6 +455,17 @@ impl TuiApp {
                         &status_message,
                         leftovers_target.as_deref(),
                     );
+
+                    if show_leftover_confirm {
+                        if let Some(item) = &leftover_confirm {
+                            dialogs::render_leftover_confirm(
+                                frame,
+                                frame.area(),
+                                &item.path,
+                                item.kind.label(),
+                            );
+                        }
+                    }
                 }
             })?;
 
@@ -473,8 +505,9 @@ impl TuiApp {
                         }
                         Action::CancelUninstall => {
                             self.confirm_target = None;
+                            self.leftover_confirm_target = None;
                             self.uninstall_queue = None;
-                            self.status_message = "Uninstall cancelled".to_string();
+                            self.status_message = "Cancelled".to_string();
                         }
                         Action::ToggleSelection => {
                             let id = self.selected_app().map(|a| a.id.clone());
@@ -516,7 +549,8 @@ impl TuiApp {
                             self.status_message = "Returned to applications".to_string();
                         }
                         Action::RescanLeftovers => self.rescan_leftovers(),
-                        Action::DeleteLeftover => self.delete_selected_leftover(),
+                        Action::RequestDeleteLeftover => self.request_delete_leftover(),
+                        Action::ConfirmDeleteLeftover => self.execute_delete_leftover(),
                         Action::RequestForceUninstall => self.request_force_uninstall(),
                         Action::ConfirmForceUninstall => {
                             if let Some(app) = self.confirm_target.take() {

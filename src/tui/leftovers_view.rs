@@ -124,7 +124,7 @@ impl LeftoversView {
                 .title(title)
                 .title_bottom(Line::from(vec![
                     Span::raw(status_message),
-                    Span::raw("  |  l apps  j/k nav  d delete  s rescan"),
+                    Span::raw("  |  q quit  l/Esc apps  j/k nav  d delete  s rescan"),
                 ])),
         )
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));

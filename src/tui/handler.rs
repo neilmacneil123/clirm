@@ -17,6 +17,7 @@ pub enum InputMode {
     Confirm,
     BatchConfirm,
     ForceConfirm,
+    LeftoverConfirm,
 }
 
 pub struct KeyHandler;
@@ -34,9 +35,10 @@ impl KeyHandler {
         leftovers_count: usize,
     ) -> Action {
         match *mode {
-            InputMode::Confirm | InputMode::BatchConfirm | InputMode::ForceConfirm => {
-                Self::handle_confirm(key, mode)
-            }
+            InputMode::Confirm
+            | InputMode::BatchConfirm
+            | InputMode::ForceConfirm
+            | InputMode::LeftoverConfirm => Self::handle_confirm(key, mode),
             InputMode::Search => Self::handle_search(key, mode, search_query, apps_view),
             InputMode::Normal => match view {
                 ViewMode::Apps => Self::handle_normal(key, mode, apps_view, filtered_count),
@@ -86,6 +88,7 @@ impl KeyHandler {
                 let action = match *mode {
                     InputMode::BatchConfirm => Action::ConfirmBatchUninstall,
                     InputMode::ForceConfirm => Action::ConfirmForceUninstall,
+                    InputMode::LeftoverConfirm => Action::ConfirmDeleteLeftover,
                     _ => Action::ConfirmUninstall,
                 };
                 *mode = InputMode::Normal;
@@ -105,8 +108,8 @@ impl KeyHandler {
         leftovers_count: usize,
     ) -> Action {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => Action::CloseLeftovers,
-            KeyCode::Char('l') => Action::CloseLeftovers,
+            KeyCode::Char('q') => Action::Quit,
+            KeyCode::Char('l') | KeyCode::Esc => Action::CloseLeftovers,
             KeyCode::Char('j') | KeyCode::Down => {
                 leftovers_view.move_down(leftovers_count);
                 Action::None
@@ -115,7 +118,7 @@ impl KeyHandler {
                 leftovers_view.move_up();
                 Action::None
             }
-            KeyCode::Char('d') => Action::DeleteLeftover,
+            KeyCode::Char('d') => Action::RequestDeleteLeftover,
             KeyCode::Char('s') => Action::RescanLeftovers,
             _ => Action::None,
         }
@@ -171,7 +174,8 @@ pub enum Action {
     OpenLeftovers,
     CloseLeftovers,
     RescanLeftovers,
-    DeleteLeftover,
+    RequestDeleteLeftover,
+    ConfirmDeleteLeftover,
     RequestForceUninstall,
     ConfirmForceUninstall,
 }
@@ -210,6 +214,32 @@ mod tests {
         }
     }
 
+    fn key_event(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn handle_key(
+        key: KeyEvent,
+        view: ViewMode,
+        mode: &mut InputMode,
+        search_query: &mut String,
+        apps_view: &mut AppsView,
+        leftovers_view: &mut LeftoversView,
+        filtered_count: usize,
+        leftovers_count: usize,
+    ) -> Action {
+        KeyHandler::handle(
+            key,
+            view,
+            mode,
+            search_query,
+            apps_view,
+            leftovers_view,
+            filtered_count,
+            leftovers_count,
+        )
+    }
+
     #[test]
     fn filtered_indices_all() {
         let apps = vec![sample_app("A"), sample_app("B")];
@@ -217,5 +247,176 @@ mod tests {
             filtered_indices(&apps, FilterPreset::All, "", false),
             vec![0, 1]
         );
+    }
+
+    #[test]
+    fn leftovers_q_quits() {
+        let mut mode = InputMode::Normal;
+        let mut search = String::new();
+        let mut apps_view = AppsView::new();
+        let mut leftovers_view = LeftoversView::new();
+
+        let action = handle_key(
+            key_event(KeyCode::Char('q')),
+            ViewMode::Leftovers,
+            &mut mode,
+            &mut search,
+            &mut apps_view,
+            &mut leftovers_view,
+            0,
+            0,
+        );
+
+        assert_eq!(action, Action::Quit);
+    }
+
+    #[test]
+    fn leftovers_esc_returns_to_apps() {
+        let mut mode = InputMode::Normal;
+        let mut search = String::new();
+        let mut apps_view = AppsView::new();
+        let mut leftovers_view = LeftoversView::new();
+
+        let action = handle_key(
+            key_event(KeyCode::Esc),
+            ViewMode::Leftovers,
+            &mut mode,
+            &mut search,
+            &mut apps_view,
+            &mut leftovers_view,
+            0,
+            0,
+        );
+
+        assert_eq!(action, Action::CloseLeftovers);
+    }
+
+    #[test]
+    fn leftovers_d_requests_delete() {
+        let mut mode = InputMode::Normal;
+        let mut search = String::new();
+        let mut apps_view = AppsView::new();
+        let mut leftovers_view = LeftoversView::new();
+
+        let action = handle_key(
+            key_event(KeyCode::Char('d')),
+            ViewMode::Leftovers,
+            &mut mode,
+            &mut search,
+            &mut apps_view,
+            &mut leftovers_view,
+            0,
+            1,
+        );
+
+        assert_eq!(action, Action::RequestDeleteLeftover);
+    }
+
+    #[test]
+    fn force_confirm_y_confirms() {
+        let mut mode = InputMode::ForceConfirm;
+        let mut search = String::new();
+        let mut apps_view = AppsView::new();
+        let mut leftovers_view = LeftoversView::new();
+
+        let action = handle_key(
+            key_event(KeyCode::Char('y')),
+            ViewMode::Apps,
+            &mut mode,
+            &mut search,
+            &mut apps_view,
+            &mut leftovers_view,
+            1,
+            0,
+        );
+
+        assert_eq!(action, Action::ConfirmForceUninstall);
+        assert_eq!(mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn force_confirm_esc_cancels() {
+        let mut mode = InputMode::ForceConfirm;
+        let mut search = String::new();
+        let mut apps_view = AppsView::new();
+        let mut leftovers_view = LeftoversView::new();
+
+        let action = handle_key(
+            key_event(KeyCode::Esc),
+            ViewMode::Apps,
+            &mut mode,
+            &mut search,
+            &mut apps_view,
+            &mut leftovers_view,
+            1,
+            0,
+        );
+
+        assert_eq!(action, Action::CancelUninstall);
+        assert_eq!(mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn leftover_confirm_does_not_leak_to_leftovers_actions() {
+        let mut mode = InputMode::LeftoverConfirm;
+        let mut search = String::new();
+        let mut apps_view = AppsView::new();
+        let mut leftovers_view = LeftoversView::new();
+
+        let action = handle_key(
+            key_event(KeyCode::Char('d')),
+            ViewMode::Leftovers,
+            &mut mode,
+            &mut search,
+            &mut apps_view,
+            &mut leftovers_view,
+            0,
+            1,
+        );
+
+        assert_eq!(action, Action::None);
+    }
+
+    #[test]
+    fn leftover_confirm_y_deletes() {
+        let mut mode = InputMode::LeftoverConfirm;
+        let mut search = String::new();
+        let mut apps_view = AppsView::new();
+        let mut leftovers_view = LeftoversView::new();
+
+        let action = handle_key(
+            key_event(KeyCode::Char('y')),
+            ViewMode::Leftovers,
+            &mut mode,
+            &mut search,
+            &mut apps_view,
+            &mut leftovers_view,
+            0,
+            1,
+        );
+
+        assert_eq!(action, Action::ConfirmDeleteLeftover);
+        assert_eq!(mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn apps_open_leftovers_shortcut() {
+        let mut mode = InputMode::Normal;
+        let mut search = String::new();
+        let mut apps_view = AppsView::new();
+        let mut leftovers_view = LeftoversView::new();
+
+        let action = handle_key(
+            key_event(KeyCode::Char('l')),
+            ViewMode::Apps,
+            &mut mode,
+            &mut search,
+            &mut apps_view,
+            &mut leftovers_view,
+            1,
+            0,
+        );
+
+        assert_eq!(action, Action::OpenLeftovers);
     }
 }

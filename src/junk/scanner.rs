@@ -1,9 +1,13 @@
 use crate::models::{ApplicationEntry, JunkItem, JunkKind};
+use crate::path_safety::validate_deletable_path;
+use crate::registry_util::{is_deletable_registry_path, parse_registry_path, RegistryHive};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use winreg::enums::*;
 use winreg::RegKey;
+
+const MAX_REGISTRY_SCAN_DEPTH: usize = 8;
 
 pub fn scan_for_app(app: &ApplicationEntry) -> Result<Vec<JunkItem>> {
     let mut items = Vec::new();
@@ -13,7 +17,7 @@ pub fn scan_for_app(app: &ApplicationEntry) -> Result<Vec<JunkItem>> {
         collect_path_leftovers(
             &mut items,
             &mut seen,
-            Path::new(location),
+            Path::new(location.trim()),
             &app.display_name,
         );
     }
@@ -33,7 +37,7 @@ pub fn scan_orphan_leftovers(apps: &[ApplicationEntry]) -> Result<Vec<JunkItem>>
             collect_path_leftovers(
                 &mut items,
                 &mut seen,
-                Path::new(location),
+                Path::new(location.trim()),
                 &app.display_name,
             );
         }
@@ -45,19 +49,22 @@ pub fn scan_orphan_leftovers(apps: &[ApplicationEntry]) -> Result<Vec<JunkItem>>
 
 pub fn delete_junk_item(item: &JunkItem) -> Result<()> {
     match item.kind {
-        JunkKind::File => {
+        JunkKind::File | JunkKind::Directory => {
+            validate_deletable_path(Path::new(&item.path))?;
             if Path::new(&item.path).exists() {
-                fs::remove_file(&item.path)
-                    .with_context(|| format!("failed to delete file {}", item.path))?;
-            }
-        }
-        JunkKind::Directory => {
-            if Path::new(&item.path).exists() {
-                fs::remove_dir_all(&item.path)
-                    .with_context(|| format!("failed to delete directory {}", item.path))?;
+                if item.kind == JunkKind::Directory {
+                    fs::remove_dir_all(&item.path)
+                        .with_context(|| format!("failed to delete directory {}", item.path))?;
+                } else {
+                    fs::remove_file(&item.path)
+                        .with_context(|| format!("failed to delete file {}", item.path))?;
+                }
             }
         }
         JunkKind::RegistryKey => {
+            if !is_deletable_registry_path(&item.path) {
+                anyhow::bail!("refusing to delete unsafe registry path: {}", item.path);
+            }
             delete_registry_key(&item.path)?;
         }
     }
@@ -72,7 +79,11 @@ fn collect_path_leftovers(
     path: &Path,
     source_app: &str,
 ) {
-    if !path.exists() {
+    if path.as_os_str().is_empty() || !path.exists() {
+        return;
+    }
+
+    if validate_deletable_path(path).is_err() {
         return;
     }
 
@@ -120,13 +131,26 @@ fn collect_registry_leftovers(
         return Ok(());
     }
 
-    let display_lower = app.display_name.to_lowercase();
-    let publisher_lower = app.publisher.as_ref().map(|p| p.to_lowercase());
+    if registry_key_exists(&app.id) {
+        push_item(
+            items,
+            seen,
+            app.id.clone(),
+            JunkKind::RegistryKey,
+            None,
+            &app.display_name,
+        );
+    }
 
+    let display_lower = app.display_name.to_ascii_lowercase();
     let roots = [
-        (HKEY_LOCAL_MACHINE, "HKLM", r"SOFTWARE"),
-        (HKEY_CURRENT_USER, "HKCU", r"SOFTWARE"),
-        (HKEY_LOCAL_MACHINE, "HKLM", r"SOFTWARE\WOW6432Node"),
+        (HKEY_LOCAL_MACHINE, RegistryHive::LocalMachine, r"SOFTWARE"),
+        (HKEY_CURRENT_USER, RegistryHive::CurrentUser, r"SOFTWARE"),
+        (
+            HKEY_LOCAL_MACHINE,
+            RegistryHive::LocalMachine,
+            r"SOFTWARE\WOW6432Node",
+        ),
     ];
 
     for (hive, hive_label, base_path) in roots {
@@ -134,30 +158,34 @@ fn collect_registry_leftovers(
         let Ok(base) = root.open_subkey(base_path) else {
             continue;
         };
-        let rooted_path = format!(r"{hive_label}\{base_path}");
-        scan_registry_tree(
+        let rooted_path = format!("{}\\{base_path}", hive_label.label());
+        scan_registry_tree_by_display_name(
             &base,
             &rooted_path,
             &display_lower,
-            publisher_lower.as_deref(),
             items,
             seen,
             &app.display_name,
+            0,
         )?;
     }
 
     Ok(())
 }
 
-fn scan_registry_tree(
+fn scan_registry_tree_by_display_name(
     key: &RegKey,
     current_path: &str,
     display_lower: &str,
-    publisher_lower: Option<&str>,
     items: &mut Vec<JunkItem>,
     seen: &mut std::collections::HashSet<String>,
     source_app: &str,
+    depth: usize,
 ) -> Result<()> {
+    if depth >= MAX_REGISTRY_SCAN_DEPTH {
+        return Ok(());
+    }
+
     for subkey_name in key.enum_keys().filter_map(Result::ok) {
         let full_path = format!(r"{current_path}\{subkey_name}");
         let subkey = match key.open_subkey(&subkey_name) {
@@ -165,36 +193,45 @@ fn scan_registry_tree(
             Err(_) => continue,
         };
 
-        let name_match = subkey_name.to_lowercase().contains(display_lower);
-        let publisher_match = publisher_lower
-            .map(|publisher| subkey_name.to_lowercase().contains(publisher))
-            .unwrap_or(false);
-
-        if name_match || publisher_match {
-            push_item(
-                items,
-                seen,
-                full_path.clone(),
-                JunkKind::RegistryKey,
-                None,
-                source_app,
-            );
+        if current_path.split('\\').count() >= 4 {
+            if let Ok(display_name) = subkey.get_value::<String, _>("DisplayName") {
+                if display_name.to_ascii_lowercase() == *display_lower
+                    && is_deletable_registry_path(&full_path)
+                {
+                    push_item(
+                        items,
+                        seen,
+                        full_path.clone(),
+                        JunkKind::RegistryKey,
+                        None,
+                        source_app,
+                    );
+                }
+            }
         }
 
-        if full_path.split('\\').count() < 6 {
-            scan_registry_tree(
-                &subkey,
-                &full_path,
-                display_lower,
-                publisher_lower,
-                items,
-                seen,
-                source_app,
-            )?;
-        }
+        scan_registry_tree_by_display_name(
+            &subkey,
+            &full_path,
+            display_lower,
+            items,
+            seen,
+            source_app,
+            depth + 1,
+        )?;
     }
 
     Ok(())
+}
+
+fn registry_key_exists(path: &str) -> bool {
+    let Ok(parsed) = parse_registry_path(path) else {
+        return false;
+    };
+
+    RegKey::predef(parsed.hive.hkey())
+        .open_subkey(format!("{}\\{}", parsed.parent_path, parsed.key_name))
+        .is_ok()
 }
 
 fn push_item(
@@ -240,25 +277,14 @@ fn estimate_path_size(path: &Path) -> Option<u64> {
     Some(total)
 }
 
-fn delete_registry_key(path: &str) -> Result<()> {
-    let (hive, subpath) = if let Some(rest) = path.strip_prefix("HKCU\\") {
-        (HKEY_CURRENT_USER, rest)
-    } else if let Some(rest) = path.strip_prefix("HKLM\\") {
-        (HKEY_LOCAL_MACHINE, rest)
-    } else {
-        anyhow::bail!("invalid registry path (missing hive): {path}");
-    };
-
-    let mut segments: Vec<&str> = subpath.split('\\').collect();
-    let key_name = segments.pop().context("registry path missing key name")?;
-    let parent_path = segments.join("\\");
-
-    let root = RegKey::predef(hive);
+pub(crate) fn delete_registry_key(path: &str) -> Result<()> {
+    let parsed = parse_registry_path(path)?;
+    let root = RegKey::predef(parsed.hive.hkey());
     let parent = root
-        .open_subkey_with_flags(&parent_path, KEY_WRITE)
+        .open_subkey_with_flags(&parsed.parent_path, KEY_WRITE)
         .with_context(|| format!("failed to open registry parent for {path}"))?;
     parent
-        .delete_subkey(key_name)
+        .delete_subkey(&parsed.key_name)
         .with_context(|| format!("failed to delete registry key {path}"))?;
     Ok(())
 }
@@ -285,6 +311,7 @@ fn sanitize_folder_name(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::models::{AppSource, UninstallerType};
+    use crate::registry_util::RegistryHive;
 
     #[test]
     fn sanitize_folder_name_strips_invalid_chars() {
@@ -313,5 +340,48 @@ mod tests {
 
         let items = scan_for_app(&app).unwrap();
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn delete_registry_key_parses_hklm_path() {
+        let err = delete_registry_key(r"HKLM\SOFTWARE\MissingVendor\MissingApp").unwrap_err();
+        assert!(err.to_string().contains("failed to open registry parent"));
+    }
+
+    #[test]
+    fn delete_registry_key_parses_hkcu_path() {
+        let err = delete_registry_key(r"HKCU\SOFTWARE\MissingVendor\MissingApp").unwrap_err();
+        assert!(err.to_string().contains("failed to open registry parent"));
+    }
+
+    #[test]
+    fn delete_registry_key_rejects_missing_hive() {
+        assert!(delete_registry_key(r"SOFTWARE\Vendor\App").is_err());
+    }
+
+    #[test]
+    fn delete_junk_item_rejects_vendor_registry_root() {
+        let item = JunkItem {
+            id: r"HKLM\SOFTWARE\Adobe".into(),
+            path: r"HKLM\SOFTWARE\Adobe".into(),
+            kind: JunkKind::RegistryKey,
+            size_estimate: None,
+            source_app: Some("Adobe".into()),
+        };
+        assert!(delete_junk_item(&item).is_err());
+    }
+
+    #[test]
+    fn registry_key_exists_checks_parseable_paths() {
+        assert!(!registry_key_exists("not-a-registry-path"));
+        assert!(!registry_key_exists(
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{00000000-0000-0000-0000-000000000000}"
+        ));
+    }
+
+    #[test]
+    fn parse_registry_path_round_trip_hive_labels() {
+        let parsed = parse_registry_path(r"HKCU\SOFTWARE\Vendor\App").unwrap();
+        assert_eq!(parsed.hive, RegistryHive::CurrentUser);
     }
 }

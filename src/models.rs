@@ -84,9 +84,17 @@ impl ApplicationEntry {
     }
 
     pub fn can_force_uninstall(&self) -> bool {
-        !self.is_protected
-            && !self.is_system_component
-            && (self.install_location.is_some() || self.source == AppSource::Registry)
+        if self.is_protected || self.is_system_component {
+            return false;
+        }
+
+        if self.source == AppSource::Registry {
+            return true;
+        }
+
+        self.install_location
+            .as_deref()
+            .is_some_and(crate::path_safety::is_safe_install_location)
     }
 }
 
