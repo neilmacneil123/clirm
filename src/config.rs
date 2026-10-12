@@ -31,10 +31,7 @@ impl Default for Config {
             scan_portable: true,
             scan_steam: true,
             scan_chocolatey: true,
-            portable_scan_paths: vec![
-                r"C:\Program Files".into(),
-                r"C:\Program Files (x86)".into(),
-            ],
+            portable_scan_paths: vec![r"C:\Program Files".into(), r"C:\Program Files (x86)".into()],
         }
     }
 }

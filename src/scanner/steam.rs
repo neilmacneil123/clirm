@@ -12,7 +12,9 @@ pub fn scan_steam() -> Result<Vec<ApplicationEntry>> {
     };
 
     let mut libraries = vec![steam_path.clone()];
-    libraries.extend(parse_library_folders(&steam_path.join("steamapps/libraryfolders.vdf")));
+    libraries.extend(parse_library_folders(
+        &steam_path.join("steamapps/libraryfolders.vdf"),
+    ));
 
     let mut entries = Vec::new();
     let mut seen = HashSet::new();

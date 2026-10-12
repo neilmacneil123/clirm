@@ -1,8 +1,11 @@
 mod config;
 mod export;
 mod filter;
+mod junk;
 mod models;
+mod path_safety;
 mod protection;
+mod registry_util;
 mod scanner;
 mod tui;
 mod uninstall;

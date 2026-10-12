@@ -5,8 +5,12 @@ use std::io::Write;
 use std::path::Path;
 
 pub fn export_csv(apps: &[ApplicationEntry], path: &Path) -> Result<()> {
-    let mut file = File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
-    writeln!(file, "id,display_name,version,publisher,source,install_location,size_bytes,is_protected")?;
+    let mut file =
+        File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
+    writeln!(
+        file,
+        "id,display_name,version,publisher,source,install_location,size_bytes,is_protected"
+    )?;
     for app in apps {
         writeln!(
             file,

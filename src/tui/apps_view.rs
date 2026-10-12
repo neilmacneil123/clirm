@@ -91,7 +91,8 @@ impl AppsView {
         if selected < offset {
             *self.table_state.offset_mut() = selected;
         } else if selected >= offset.saturating_add(visible_rows) {
-            *self.table_state.offset_mut() = selected.saturating_sub(visible_rows.saturating_sub(1));
+            *self.table_state.offset_mut() =
+                selected.saturating_sub(visible_rows.saturating_sub(1));
         }
     }
 
@@ -185,7 +186,7 @@ impl AppsView {
                             Color::Red
                         }),
                     ),
-                    Span::raw("  |  Space select  a all  X batch  f filter  R regex  e export  p protect"),
+                    Span::raw("  |  Space select  a all  x uninstall  X batch  Z force  l leftovers  f filter  R regex  e export  p protect"),
                 ])),
         )
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));

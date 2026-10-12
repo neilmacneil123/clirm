@@ -102,7 +102,10 @@ fn find_exe(dir: &Path) -> Option<std::path::PathBuf> {
     let read_dir = fs::read_dir(dir).ok()?;
     for entry in read_dir.filter_map(Result::ok) {
         let path = entry.path();
-        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) {
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
+        {
             return Some(path);
         }
     }
