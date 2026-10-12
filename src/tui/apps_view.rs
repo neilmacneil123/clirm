@@ -1,5 +1,6 @@
 use crate::filter::FilterPreset;
 use crate::models::ApplicationEntry;
+use crate::ratings::RatingTier;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -128,6 +129,7 @@ impl AppsView {
             Cell::from(" "),
             Cell::from("Name"),
             Cell::from("Version"),
+            Cell::from("Rating"),
             Cell::from("Source"),
         ])
         .style(Style::default().add_modifier(Modifier::BOLD));
@@ -143,6 +145,17 @@ impl AppsView {
                     Style::default()
                 };
 
+                let rating_label = app
+                    .rating
+                    .map(|r| format!("{} ({})", RatingTier::from_score(r).label(), r))
+                    .unwrap_or_else(|| "—".into());
+                let rating_style = match app.rating.map(RatingTier::from_score) {
+                    Some(RatingTier::Safe) => Style::default().fg(Color::Green),
+                    Some(RatingTier::Moderate) => Style::default().fg(Color::Yellow),
+                    Some(RatingTier::Risky) => Style::default().fg(Color::Red),
+                    _ => Style::default().fg(Color::DarkGray),
+                };
+
                 let mark = if self.is_selected(&app.id) {
                     "[x]"
                 } else {
@@ -153,6 +166,7 @@ impl AppsView {
                     Cell::from(mark),
                     Cell::from(app.display_name.as_str()).style(name_style),
                     Cell::from(app.version.as_deref().unwrap_or("—")),
+                    Cell::from(rating_label).style(rating_style),
                     Cell::from(app.source.label()),
                 ])
             })
@@ -165,9 +179,10 @@ impl AppsView {
             rows,
             [
                 ratatui::layout::Constraint::Length(4),
-                ratatui::layout::Constraint::Percentage(50),
-                ratatui::layout::Constraint::Percentage(20),
-                ratatui::layout::Constraint::Percentage(26),
+                ratatui::layout::Constraint::Percentage(40),
+                ratatui::layout::Constraint::Percentage(15),
+                ratatui::layout::Constraint::Percentage(18),
+                ratatui::layout::Constraint::Percentage(18),
             ],
         )
         .header(header)
@@ -186,7 +201,7 @@ impl AppsView {
                             Color::Red
                         }),
                     ),
-                    Span::raw("  |  Space select  a all  x uninstall  X batch  Z force  l leftovers  f filter  R regex  e export  p protect"),
+                    Span::raw("  |  Space select  a all  x uninstall  X batch  Z force  l leftovers  S startup  f filter  R regex  e export  p protect"),
                 ])),
         )
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));

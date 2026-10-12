@@ -1,3 +1,4 @@
+mod cli;
 mod config;
 mod export;
 mod filter;
@@ -5,8 +6,10 @@ mod junk;
 mod models;
 mod path_safety;
 mod protection;
+mod ratings;
 mod registry_util;
 mod scanner;
+mod startup;
 mod tui;
 mod uninstall;
 
@@ -14,23 +17,16 @@ use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-#[derive(Debug, Parser)]
-#[command(name = "clirm", about = "BCUninstaller-style CLI TUI for Windows")]
-struct Cli {
-    /// Run without launching the TUI (reserved for future CLI subcommands)
-    #[arg(long, hide = true)]
-    headless: bool,
-}
-
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let cli = Cli::parse();
+    let args = cli::normalize_bcu_args(std::env::args());
+    let cli = cli::Cli::parse_from(args);
 
-    if cli.headless {
-        anyhow::bail!("headless mode is not yet implemented");
+    if cli.command.is_some() {
+        return cli::run(cli);
     }
 
     let config = config::Config::load()?;
@@ -41,7 +37,13 @@ fn main() -> Result<()> {
         tracing::warn!("not running with administrator privileges; uninstall may fail");
     }
 
-    let mut app = tui::TuiApp::new(config, protection, elevated)?;
+    let bcul_filter = cli
+        .bcul
+        .as_ref()
+        .map(|path| filter::bcul::BculList::from_file(path))
+        .transpose()?;
+
+    let mut app = tui::TuiApp::new(config, protection, elevated, bcul_filter)?;
     app.run()?;
 
     Ok(())

@@ -1,4 +1,8 @@
+pub mod bcul;
+
+use crate::filter::bcul::BculList;
 use crate::models::{AppSource, ApplicationEntry};
+use crate::ratings::RatingTier;
 use regex::Regex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8,6 +12,8 @@ pub enum FilterPreset {
     Store,
     Orphans,
     Large,
+    Risky,
+    Bcul,
 }
 
 impl FilterPreset {
@@ -18,23 +24,43 @@ impl FilterPreset {
             Self::Store => "Store",
             Self::Orphans => "Orphans",
             Self::Large => "Large (>500MB)",
+            Self::Risky => "Risky",
+            Self::Bcul => "BCUL",
         }
     }
 
-    pub fn next(self) -> Self {
-        match self {
-            Self::All => Self::Registry,
-            Self::Registry => Self::Store,
-            Self::Store => Self::Orphans,
-            Self::Orphans => Self::Large,
-            Self::Large => Self::All,
-        }
+    const ORDER: [Self; 7] = [
+        Self::All,
+        Self::Registry,
+        Self::Store,
+        Self::Orphans,
+        Self::Large,
+        Self::Risky,
+        Self::Bcul,
+    ];
+
+    /// Advance to the next preset in the cycle, skipping BCUL when no list is loaded.
+    /// Always moves exactly one visible step per call.
+    pub fn next_available(self, has_bcul: bool) -> Self {
+        let available: Vec<Self> = Self::ORDER
+            .into_iter()
+            .filter(|preset| *preset != Self::Bcul || has_bcul)
+            .collect();
+        let pos = available
+            .iter()
+            .position(|&preset| preset == self)
+            .unwrap_or(0);
+        available[(pos + 1) % available.len()]
     }
 }
 
 const LARGE_THRESHOLD: u64 = 500 * 1024 * 1024;
 
-pub fn apply_preset(apps: &[ApplicationEntry], preset: FilterPreset) -> Vec<usize> {
+pub fn apply_preset(
+    apps: &[ApplicationEntry],
+    preset: FilterPreset,
+    bcul: Option<&BculList>,
+) -> Vec<usize> {
     apps.iter()
         .enumerate()
         .filter(|(_, app)| match preset {
@@ -43,6 +69,10 @@ pub fn apply_preset(apps: &[ApplicationEntry], preset: FilterPreset) -> Vec<usiz
             FilterPreset::Store => app.source == AppSource::Store,
             FilterPreset::Orphans => app.is_orphan,
             FilterPreset::Large => app.size_estimate.is_some_and(|s| s >= LARGE_THRESHOLD),
+            FilterPreset::Risky => app
+                .rating
+                .is_some_and(|r| RatingTier::from_score(r) == RatingTier::Risky),
+            FilterPreset::Bcul => bcul.and_then(|list| list.test_entry(app)).unwrap_or(false),
         })
         .map(|(i, _)| i)
         .collect()
@@ -98,8 +128,9 @@ pub fn filter_visible(
     preset: FilterPreset,
     query: &str,
     use_regex: bool,
+    bcul: Option<&BculList>,
 ) -> Vec<usize> {
-    let preset_indices = apply_preset(apps, preset);
+    let preset_indices = apply_preset(apps, preset, bcul);
     apply_search(apps, &preset_indices, query, use_regex)
 }
 
@@ -134,7 +165,29 @@ mod tests {
             app(AppSource::Registry, "A", None, false),
             app(AppSource::Store, "B", None, false),
         ];
-        assert_eq!(apply_preset(&apps, FilterPreset::Store), vec![1]);
+        assert_eq!(apply_preset(&apps, FilterPreset::Store, None), vec![1]);
+    }
+
+    #[test]
+    fn next_available_skips_bcul_without_list() {
+        assert_eq!(FilterPreset::Risky.next_available(false), FilterPreset::All);
+        assert_eq!(FilterPreset::Risky.next_available(true), FilterPreset::Bcul);
+    }
+
+    #[test]
+    fn next_available_advances_one_step_without_bcul() {
+        let without_bcul = [
+            FilterPreset::All,
+            FilterPreset::Registry,
+            FilterPreset::Store,
+            FilterPreset::Orphans,
+            FilterPreset::Large,
+            FilterPreset::Risky,
+        ];
+        for window in without_bcul.windows(2) {
+            assert_eq!(window[0].next_available(false), window[1]);
+        }
+        assert_eq!(FilterPreset::Risky.next_available(false), FilterPreset::All);
     }
 
     #[test]

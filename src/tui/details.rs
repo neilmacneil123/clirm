@@ -1,4 +1,5 @@
 use crate::models::ApplicationEntry;
+use crate::ratings::RatingTier;
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -42,7 +43,7 @@ fn details_lines(app: &ApplicationEntry) -> Vec<Line<'static>> {
         detail_line(
             "Rating",
             app.rating
-                .map(|r| r.to_string())
+                .map(|r| format!("{} ({})", RatingTier::from_score(r).label(), r))
                 .unwrap_or_else(|| "—".into()),
         ),
     ];
