@@ -1,3 +1,4 @@
+use crate::filter::{filter_visible, FilterPreset};
 use crate::models::ApplicationEntry;
 use crate::tui::apps_view::AppsView;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -7,6 +8,7 @@ pub enum InputMode {
     Normal,
     Search,
     Confirm,
+    BatchConfirm,
 }
 
 pub struct KeyHandler;
@@ -20,7 +22,7 @@ impl KeyHandler {
         filtered_count: usize,
     ) -> Action {
         match *mode {
-            InputMode::Confirm => Self::handle_confirm(key, mode),
+            InputMode::Confirm | InputMode::BatchConfirm => Self::handle_confirm(key, mode),
             InputMode::Search => Self::handle_search(key, mode, search_query, apps_view),
             InputMode::Normal => Self::handle_normal(key, mode, apps_view, filtered_count),
         }
@@ -48,6 +50,13 @@ impl KeyHandler {
             }
             KeyCode::Char('r') => Action::Refresh,
             KeyCode::Char('x') => Action::RequestUninstall,
+            KeyCode::Char('X') => Action::RequestBatchUninstall,
+            KeyCode::Char(' ') => Action::ToggleSelection,
+            KeyCode::Char('a') => Action::SelectAll,
+            KeyCode::Char('f') => Action::CycleFilter,
+            KeyCode::Char('R') => Action::ToggleRegex,
+            KeyCode::Char('e') => Action::Export,
+            KeyCode::Char('p') => Action::ToggleProtection,
             _ => Action::None,
         }
     }
@@ -55,8 +64,13 @@ impl KeyHandler {
     fn handle_confirm(key: KeyEvent, mode: &mut InputMode) -> Action {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let batch = *mode == InputMode::BatchConfirm;
                 *mode = InputMode::Normal;
-                Action::ConfirmUninstall
+                if batch {
+                    Action::ConfirmBatchUninstall
+                } else {
+                    Action::ConfirmUninstall
+                }
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 *mode = InputMode::Normal;
@@ -103,31 +117,25 @@ pub enum Action {
     Quit,
     Refresh,
     RequestUninstall,
+    RequestBatchUninstall,
     ConfirmUninstall,
+    ConfirmBatchUninstall,
     CancelUninstall,
+    ToggleSelection,
+    SelectAll,
+    CycleFilter,
+    ToggleRegex,
+    Export,
+    ToggleProtection,
 }
 
-pub fn filter_apps(apps: &[ApplicationEntry], query: &str) -> Vec<usize> {
-    if query.is_empty() {
-        return (0..apps.len()).collect();
-    }
-
-    let needle = query.to_lowercase();
-    apps.iter()
-        .enumerate()
-        .filter(|(_, app)| {
-            app.display_name.to_lowercase().contains(&needle)
-                || app
-                    .publisher
-                    .as_ref()
-                    .is_some_and(|p| p.to_lowercase().contains(&needle))
-                || app
-                    .version
-                    .as_ref()
-                    .is_some_and(|v| v.to_lowercase().contains(&needle))
-        })
-        .map(|(index, _)| index)
-        .collect()
+pub fn filtered_indices(
+    apps: &[ApplicationEntry],
+    preset: FilterPreset,
+    query: &str,
+    use_regex: bool,
+) -> Vec<usize> {
+    filter_visible(apps, preset, query, use_regex)
 }
 
 #[cfg(test)]
@@ -135,12 +143,12 @@ mod tests {
     use super::*;
     use crate::models::{AppSource, ApplicationEntry, UninstallerType};
 
-    fn sample_app(name: &str, publisher: Option<&str>, version: Option<&str>) -> ApplicationEntry {
+    fn sample_app(name: &str) -> ApplicationEntry {
         ApplicationEntry {
             id: name.to_string(),
             display_name: name.to_string(),
-            version: version.map(str::to_string),
-            publisher: publisher.map(str::to_string),
+            version: None,
+            publisher: None,
             source: AppSource::Registry,
             install_location: None,
             uninstall_string: Some("cmd".into()),
@@ -150,35 +158,14 @@ mod tests {
             install_date: None,
             is_protected: false,
             is_system_component: false,
+            is_orphan: false,
             rating: None,
         }
     }
 
     #[test]
-    fn filter_apps_empty_query_returns_all_indices() {
-        let apps = vec![
-            sample_app("Alpha", None, None),
-            sample_app("Beta", None, None),
-        ];
-        assert_eq!(filter_apps(&apps, ""), vec![0, 1]);
-    }
-
-    #[test]
-    fn filter_apps_matches_display_name() {
-        let apps = vec![
-            sample_app("Alpha App", None, None),
-            sample_app("Beta App", None, None),
-        ];
-        assert_eq!(filter_apps(&apps, "alpha"), vec![0]);
-    }
-
-    #[test]
-    fn filter_apps_matches_publisher_and_version() {
-        let apps = vec![
-            sample_app("One", Some("Acme Corp"), None),
-            sample_app("Two", None, Some("2.0.0")),
-        ];
-        assert_eq!(filter_apps(&apps, "acme"), vec![0]);
-        assert_eq!(filter_apps(&apps, "2.0"), vec![1]);
+    fn filtered_indices_all() {
+        let apps = vec![sample_app("A"), sample_app("B")];
+        assert_eq!(filtered_indices(&apps, FilterPreset::All, "", false), vec![0, 1]);
     }
 }
